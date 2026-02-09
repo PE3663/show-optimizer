@@ -7,7 +7,6 @@ import os
 import io
 import time
 import gspread
-from streamlit_sortables import sort_items
 from datetime import datetime
 from google.oauth2.service_account import Credentials
 
@@ -134,34 +133,26 @@ def detect_and_map_csv(df):
             routine_col = col_map[k]
             break
     
-    first_keys = [
-        'student first name', 'first name', 'student first', 'first', 'fname',
-    ]
+    first_keys = ['student first name', 'first name', 'student first', 'first', 'fname']
     for k in first_keys:
         if k in col_map:
             first_col = col_map[k]
             break
     
-    last_keys = [
-        'student last name', 'last name', 'student last', 'last', 'lname',
-    ]
+    last_keys = ['student last name', 'last name', 'student last', 'last', 'lname']
     for k in last_keys:
         if k in col_map:
             last_col = col_map[k]
             break
     
-    performer_keys = [
-        'performer name', 'performer', 'dancer name', 'dancer_name', 'dancer',
-        'student name', 'student', 'name', 'full name', 'fullname',
-    ]
+    performer_keys = ['performer name', 'performer', 'dancer name', 'dancer_name', 'dancer',
+                      'student name', 'student', 'name', 'full name', 'fullname']
     for k in performer_keys:
         if k in col_map:
             performer_col = col_map[k]
             break
     
-    style_keys = [
-        'style', 'discipline', 'genre', 'type', 'dance style', 'category',
-    ]
+    style_keys = ['style', 'discipline', 'genre', 'type', 'dance style', 'category']
     for k in style_keys:
         if k in col_map:
             style_col = col_map[k]
@@ -185,9 +176,7 @@ def detect_and_map_csv(df):
         else:
             mapped['style'] = df[routine_col].apply(extract_discipline)
         if last_col:
-            mapped['dancer_name'] = (
-                df[first_col].astype(str) + ' ' + df[last_col].astype(str)
-            )
+            mapped['dancer_name'] = df[first_col].astype(str) + ' ' + df[last_col].astype(str)
         else:
             mapped['dancer_name'] = df[first_col].astype(str)
         return mapped, True
@@ -195,12 +184,7 @@ def detect_and_map_csv(df):
     if len(df.columns) >= 2 and routine_col is None:
         mapped = pd.DataFrame()
         mapped['routine_name'] = df.iloc[:, 0]
-        if style_col:
-            mapped['style'] = df[style_col].fillna('General')
-        elif len(df.columns) >= 3:
-            mapped['style'] = df.iloc[:, 0].apply(extract_discipline)
-        else:
-            mapped['style'] = df.iloc[:, 0].apply(extract_discipline)
+        mapped['style'] = df.iloc[:, 0].apply(extract_discipline)
         mapped['dancer_name'] = df.iloc[:, -1].astype(str)
         return mapped, False
     
@@ -216,12 +200,7 @@ if 'current_show' not in st.session_state:
     st.session_state.current_show = None
 
 def calculate_conflicts(routines, warn_gap, consider_gap):
-    conflicts = {
-        'danger': [],
-        'warning': [],
-        'dancer_conflicts': {},
-        'gap_histogram': {}
-    }
+    conflicts = {'danger': [], 'warning': [], 'dancer_conflicts': {}, 'gap_histogram': {}}
     dancer_appearances = {}
     for i, routine in enumerate(routines):
         for dancer in routine.get('dancers', []):
@@ -239,16 +218,14 @@ def calculate_conflicts(routines, warn_gap, consider_gap):
             if gap < warn_gap:
                 conflicts['danger'].append(apps[j+1][0])
                 conflicts['dancer_conflicts'][dancer] = {
-                    'min_gap': gap,
-                    'routines': [apps[j][1], apps[j+1][1]],
+                    'min_gap': gap, 'routines': [apps[j][1], apps[j+1][1]],
                     'positions': [apps[j][0], apps[j+1][0]]
                 }
             elif gap < consider_gap:
                 conflicts['warning'].append(apps[j+1][0])
                 if dancer not in conflicts['dancer_conflicts']:
                     conflicts['dancer_conflicts'][dancer] = {
-                        'min_gap': gap,
-                        'routines': [apps[j][1], apps[j+1][1]],
+                        'min_gap': gap, 'routines': [apps[j][1], apps[j+1][1]],
                         'positions': [apps[j][0], apps[j+1][0]]
                     }
     return conflicts
@@ -280,15 +257,10 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap):
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2):
     if not routines:
         return routines
-    
     locked = [(i, r) for i, r in enumerate(routines) if r.get('locked')]
     unlocked = [r for r in routines if not r.get('locked')]
-    
     if not unlocked:
         return routines
-    
-    locked_positions = {pos for pos, _ in locked}
-    n_total = len(routines)
     
     def build_final(placed_unlocked):
         final = list(placed_unlocked)
@@ -345,15 +317,9 @@ with st.sidebar:
             if new_name:
                 show_id = f"show_{len(st.session_state.shows)}"
                 st.session_state.shows[show_id] = {
-                    'name': new_name,
-                    'warn_gap': warn_gap,
-                    'consider_gap': consider_gap,
-                    'min_gap': min_gap,
-                    'mix_styles': mix_styles,
-                    'separate_ages': True,
-                    'age_gap': 2,
-                    'routines': [],
-                    'optimized': []
+                    'name': new_name, 'warn_gap': warn_gap, 'consider_gap': consider_gap,
+                    'min_gap': min_gap, 'mix_styles': mix_styles, 'separate_ages': True,
+                    'age_gap': 2, 'routines': [], 'optimized': []
                 }
                 st.session_state.current_show = show_id
                 save_to_sheets(spreadsheet, st.session_state.shows)
@@ -379,22 +345,15 @@ with st.sidebar:
         st.divider()
         if st.button("OPTIMIZE", type="primary", use_container_width=True):
             if not show['routines']:
-                st.warning("No routines to optimize. Upload and import a CSV first.")
+                st.warning("No routines to optimize.")
             else:
-                show['optimized'] = optimize_show(
-                    show['routines'],
-                    show['min_gap'],
-                    show['mix_styles'],
-                    show.get('separate_ages', True),
-                    show.get('age_gap', 2)
-                )
+                show['optimized'] = optimize_show(show['routines'], show['min_gap'], show['mix_styles'],
+                                                   show.get('separate_ages', True), show.get('age_gap', 2))
                 save_to_sheets(spreadsheet, st.session_state.shows)
-                st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
                 st.success("Optimized!")
                 st.rerun()
 
-if (not st.session_state.current_show or
-    st.session_state.current_show not in st.session_state.shows):
+if not st.session_state.current_show or st.session_state.current_show not in st.session_state.shows:
     st.info("Create or select a show from the sidebar")
     st.stop()
 
@@ -407,10 +366,10 @@ with tab1:
     st.subheader("Upload Class Roster (CSV)")
     st.markdown(
         "**Supported formats:**\n"
-        "- **Jackrabbit Enrollment CSV** — columns: `Class Name`, `Student First Name`, `Student Last Name`\n"
-        "- **Jackrabbit Recital Export** — columns: `Routine`, `Performer Name`\n"
-        "- **Grid-style CSV** — columns: `Class Name`, `Student Name`\n"
-        "- **App format** — columns: `routine_name`, `style`, `dancer_name`"
+        "- **Jackrabbit Enrollment CSV** - columns: `Class Name`, `Student First Name`, `Student Last Name`\n"
+        "- **Jackrabbit Recital Export** - columns: `Routine`, `Performer Name`\n"
+        "- **Grid-style CSV** - columns: `Class Name`, `Student Name`\n"
+        "- **App format** - columns: `routine_name`, `style`, `dancer_name`"
     )
     uploaded = st.file_uploader("Choose CSV", type="csv")
     if uploaded:
@@ -443,14 +402,8 @@ with tab1:
                             sv = str(row.get('style', 'General')).strip()
                             if sv == 'nan' or not sv:
                                 sv = 'General'
-                            routines[name] = {
-                                'name': name,
-                                'style': sv,
-                                'age_group': extract_age_group(name),
-                                'dancers': [],
-                                'locked': False,
-                                'id': name
-                            }
+                            routines[name] = {'name': name, 'style': sv, 'age_group': extract_age_group(name),
+                                              'dancers': [], 'locked': False, 'id': name}
                         dancer = str(row['dancer_name']).strip()
                         if dancer and dancer != 'nan' and dancer not in routines[name]['dancers']:
                             routines[name]['dancers'].append(dancer)
@@ -482,26 +435,52 @@ with tab1:
                 save_to_sheets(spreadsheet, st.session_state.shows)
                 st.rerun()
 
-with tab2:
-    st.subheader("Show Order")
-    r_list = show['optimized'] if show['optimized'] else show['routines']
+streamlit_sortables
+sort_items    r_list = show['optimized'] if show['optimized'] else show['routines']
     if not r_list:
         st.info("No routines yet. Upload a CSV first.")
     else:
-        st.markdown("**Click to expand and see dancers in each class:**")
+        st.markdown("**Click to expand and see dancers. Use buttons to reorder:**")
+        
         for i, r in enumerate(r_list):
             age_label = r.get('age_group', '')
             age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
-            lock_icon = " " if r.get('locked') else ""
+            lock_icon = " (LOCKED)" if r.get('locked') else ""
+            
             with st.expander(f"{i+1}. {r['name']} ({r['style']}){age_str}{lock_icon} - {len(r['dancers'])} dancers"):
                 if r['dancers']:
                     st.write(", ".join(r['dancers']))
                 else:
                     st.write("No dancers assigned")
-                col1, col2 = st.columns(2)
+                
+                col1, col2, col3 = st.columns(3)
                 with col1:
+                    if i > 0:
+                        if st.button("Move Up", key=f"up_{r['id']}_{i}"):
+                            r_list[i], r_list[i-1] = r_list[i-1], r_list[i]
+                            for idx, rt in enumerate(r_list):
+                                rt['order'] = idx + 1
+                            if show['optimized']:
+                                show['optimized'] = r_list
+                            else:
+                                show['routines'] = r_list
+                            save_to_sheets(spreadsheet, st.session_state.shows)
+                            st.rerun()
+                with col2:
+                    if i < len(r_list) - 1:
+                        if st.button("Move Down", key=f"down_{r['id']}_{i}"):
+                            r_list[i], r_list[i+1] = r_list[i+1], r_list[i]
+                            for idx, rt in enumerate(r_list):
+                                rt['order'] = idx + 1
+                            if show['optimized']:
+                                show['optimized'] = r_list
+                            else:
+                                show['routines'] = r_list
+                            save_to_sheets(spreadsheet, st.session_state.shows)
+                            st.rerun()
+                with col3:
                     btn_label = "Lock" if not r.get('locked') else "Unlock"
-                    if st.button(btn_label, key=f"lock_order_{r['id']}"):
+                    if st.button(btn_label, key=f"lock_order_{r['id']}_{i}"):
                         r['locked'] = not r.get('locked', False)
                         save_to_sheets(spreadsheet, st.session_state.shows)
                         st.rerun()
@@ -522,14 +501,8 @@ with tab2:
                 if not show['routines']:
                     st.warning("No routines to optimize.")
                 else:
-                    show['optimized'] = optimize_show(
-                        show['routines'],
-                        show['min_gap'],
-                        show['mix_styles'],
-                        show.get('separate_ages', True),
-                        show.get('age_gap', 2)
-                    )
-                    st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
+                    show['optimized'] = optimize_show(show['routines'], show['min_gap'], show['mix_styles'],
+                                                       show.get('separate_ages', True), show.get('age_gap', 2))
                     save_to_sheets(spreadsheet, st.session_state.shows)
                     st.success("Show optimized!")
                     st.rerun()
@@ -552,9 +525,7 @@ with tab3:
                 for j in range(start, i):
                     prev_age = r_list[j].get('age_group', 'Unknown')
                     if prev_age == curr_age:
-                        age_warnings.append(
-                            f"#{i+1} {r['name']} [{curr_age}] is only {i-j} away from #{j+1} {r_list[j]['name']} [{prev_age}]"
-                        )
+                        age_warnings.append(f"#{i+1} {r['name']} [{curr_age}] is only {i-j} away from #{j+1} {r_list[j]['name']} [{prev_age}]")
         
         if age_warnings:
             st.markdown("**Age Group Proximity:**")
@@ -565,11 +536,7 @@ with tab3:
         if conflicts['dancer_conflicts']:
             for dancer, info in conflicts['dancer_conflicts'].items():
                 emoji = "WARNING" if info['min_gap'] < show['warn_gap'] else "!"
-                st.write(
-                    f"{emoji} **{dancer}**: {info['min_gap']}-routine gap "
-                    f"({info['positions'][0]+1}. {info['routines'][0]} to "
-                    f"{info['positions'][1]+1}. {info['routines'][1]})"
-                )
+                st.write(f"{emoji} **{dancer}**: {info['min_gap']}-routine gap ({info['positions'][0]+1}. {info['routines'][0]} to {info['positions'][1]+1}. {info['routines'][1]})")
         
         if not conflicts['dancer_conflicts'] and not age_warnings:
             st.success("No conflicts!")
@@ -588,20 +555,12 @@ with tab4:
             export_data = []
             for i, r in enumerate(r_list):
                 export_data.append({
-                    'Order': i + 1,
-                    'Routine': r['name'],
-                    'Style': r['style'],
-                    'Age Group': r.get('age_group', ''),
-                    'Dancers': len(r['dancers']),
+                    'Order': i + 1, 'Routine': r['name'], 'Style': r['style'],
+                    'Age Group': r.get('age_group', ''), 'Dancers': len(r['dancers']),
                     'Dancer Names': ', '.join(r['dancers'])
                 })
             export_df = pd.DataFrame(export_data)
             csv = export_df.to_csv(index=False)
-            st.download_button(
-                "Download CSV",
-                csv,
-                "show_order.csv",
-                "text/csv"
-            )
+            st.download_button("Download CSV", csv, "show_order.csv", "text/csv")
     else:
         st.info("No routines to report on.")
