@@ -447,7 +447,14 @@ sort_items    r_list = show['optimized'] if show['optimized'] else show['routine
             age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
             lock_icon = " (LOCKED)" if r.get('locked') else ""
             
-            with st.expander(f"{i+1}. {r['name']} ({r['style']}){age_str}{lock_icon} - {len(r['dancers'])} dancers"):
+                        lock_btn_emoji = "🔒" if r.get('locked') else "🔓"
+                                    cols = st.columns([1, 25])
+                                                if cols[0].button(lock_btn_emoji, key=f"lck_{i}_{r['id']}"):
+                                                                    r['locked'] = not r.get('locked', False)
+                                                                                    save_to_sheets(spreadsheet, st.session_state.shows)
+                                                                                                    st.rerun()
+            
+            cols[1].expander
                 if r['dancers']:
                     st.write(", ".join(r['dancers']))
                 else:
