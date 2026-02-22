@@ -254,50 +254,120 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap):
                 score += 5
     return score
 
-def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2):
+def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
+    """Optimize show order using greedy construction + insertion local search."""
     if not routines:
         return routines
+
     locked = [(i, r) for i, r in enumerate(routines) if r.get('locked')]
     unlocked = [r for r in routines if not r.get('locked')]
     if not unlocked:
         return routines
-    
+
     def build_final(placed_unlocked):
         final = list(placed_unlocked)
         for pos, routine in sorted(locked):
             final.insert(min(pos, len(final)), routine)
         return final
-    
+
+    def score_order_local(order):
+        score = 0
+        dancer_last = {}
+        age_last = {}
+        team_last = -999
+        for i, r in enumerate(order):
+            if r.get('is_intermission'):
+                continue
+            for dn in r.get('dancers', []):
+                if dn in dancer_last:
+                    d = i - dancer_last[dn]
+                    if d < min_gap:
+                        score += (min_gap - d) * 100000
+                dancer_last[dn] = i
+            if separate_ages:
+                ag = r.get('age_group', 'Unknown')
+                if ag != 'Unknown' and ag in age_last:
+                    d = i - age_last[ag]
+                    if d < age_gap:
+                        score += (age_gap - d) * 1000
+                if ag != 'Unknown':
+                    age_last[ag] = i
+            if mix_styles and i > 0:
+                prev = order[i - 1]
+                if not prev.get('is_intermission'):
+                    if r.get('style') == prev.get('style'):
+                        score += 5
+            if spread_teams and is_team_routine(r):
+                d = i - team_last
+                if d < 3:
+                    score += (3 - d) * 500
+                team_last = i
+        return score
+
+    def greedy_build(shuffled):
+        """Build order by inserting each routine at its best position."""
+        order = []
+        for r in shuffled:
+            best_pos = 0
+            best_s = float('inf')
+            for pos in range(len(order) + 1):
+                order.insert(pos, r)
+                s = score_order_local(build_final(order))
+                if s < best_s:
+                    best_s = s
+                    best_pos = pos
+                order.pop(pos)
+            order.insert(best_pos, r)
+        return order
+
+    def insertion_improve(order):
+        """Remove each routine and reinsert at best position."""
+        improved = True
+        while improved:
+            improved = False
+            if time.time() - start_time >= time_limit:
+                break
+            for i in range(len(order)):
+                if order[i].get('locked'):
+                    continue
+                r = order.pop(i)
+                best_pos = i
+                best_s = score_order_local(build_final(order + [r]))
+                for pos in range(len(order) + 1):
+                    if pos == i:
+                        continue
+                    order.insert(pos, r)
+                    s = score_order_local(build_final(order))
+                    if s < best_s:
+                        best_s = s
+                        best_pos = pos
+                    order.pop(pos)
+                order.insert(best_pos, r)
+                if best_pos != i:
+                    improved = True
+                if time.time() - start_time >= time_limit:
+                    break
+        return order
+
     best_order = None
     best_score = float('inf')
-    
-    for attempt in range(800):
-        random.shuffle(unlocked)
-        candidate = unlocked.copy()
+    time_limit = 15
+    start_time = time.time()
+
+    while time.time() - start_time < time_limit:
+        shuffled = unlocked.copy()
+        random.shuffle(shuffled)
+        candidate = greedy_build(shuffled)
+        candidate = insertion_improve(candidate)
         final = build_final(candidate)
-        
-        for _ in range(300):
-            s = score_order(final, min_gap, mix_styles, separate_ages, age_gap)
-            if s == 0:
-                break
-            free = [i for i in range(len(final)) if not final[i].get('locked')]
-            if len(free) < 2:
-                break
-            a, b = random.sample(free, 2)
-            final[a], final[b] = final[b], final[a]
-            new_s = score_order(final, min_gap, mix_styles, separate_ages, age_gap)
-            if new_s > s:
-                final[a], final[b] = final[b], final[a]
-        
-        s = score_order(final, min_gap, mix_styles, separate_ages, age_gap)
+        s = score_order_local(final)
         if s < best_score:
             best_score = s
-            best_order = final.copy()
-            if best_score == 0:
-                break
-    
-    return best_order if best_order else routines
+            best_order = final[:]
+        if best_score == 0:
+            break
 
+    return best_order if best_order else routines
 st.title("Pure Energy Show Optimizer")
 
 if spreadsheet:
