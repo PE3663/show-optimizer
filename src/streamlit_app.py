@@ -416,7 +416,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
 
     def repair(order):
         """Repeatedly reinsert violating routines to reduce violations."""
-        for _pass in range(3):
+        for _pass in range(20):
             if time.time() - start_time >= time_limit:
                 break
             final = build_final(order)
@@ -436,7 +436,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
             for idx in range(len(order) - 1, -1, -1):
                 if time.time() - start_time >= time_limit:
                     break
-                if id(order[idx]) not in violating_ids or order[idx].get('locked'):
+                if order[idx].get('locked'):
                     continue
                 r = order.pop(idx)
                 best_pos = idx
@@ -480,6 +480,42 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
         if best_violations == 0:
             break
 
+        # Final swap-based repair on best_order
+    if best_order and best_violations > 0:
+        result = best_order[:]
+        for _fr in range(50):
+            dancer_last = {}
+            viol_positions = []
+            for i, r in enumerate(result):
+                if r.get('is_intermission'):
+                    continue
+                for dn in r.get('dancers', []):
+                    if dn in dancer_last:
+                        if i - dancer_last[dn] < min_gap:
+                            viol_positions.append(i)
+                            break
+                    dancer_last[dn] = i
+            if not viol_positions:
+                break
+            improved = False
+            for vi in viol_positions:
+                if result[vi].get('locked'):
+                    continue
+                for si in range(len(result)):
+                    if si == vi or result[si].get('locked'):
+                        continue
+                    result[vi], result[si] = result[si], result[vi]
+                    new_v = count_violations(result)
+                    if new_v < best_violations:
+                        best_violations = new_v
+                        improved = True
+                        break
+                    result[vi], result[si] = result[si], result[vi]
+                if improved:
+                    break
+            if not improved:
+                break
+        return result
     return best_order if best_order else routines
 
 if spreadsheet:
