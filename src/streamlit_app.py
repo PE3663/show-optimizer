@@ -86,9 +86,9 @@ def load_from_sheets(spreadsheet):
 DANCE_DISCIPLINES = [
     'hip hop', 'musical theatre', 'music theatre', 'contemporary',
     'acro', 'acrobatic', 'jazz', 'ballet', 'tap', 'lyrical',
-    'modern', 'theatre', 'theater', 'pointe', 'funk',
-    'breakdance', 'ballroom', 'latin', 'salsa', 'pom', 'kick',
-    'tumbling', 'stunting', 'lifts', 'cheer', 'stretch',
+    'modern', 'theatre', 'theater', 'pointe', 'funk', 'breakdance',
+    'ballroom', 'latin', 'salsa', 'pom', 'kick', 'tumbling',
+    'stunting', 'lifts', 'cheer', 'stretch',
 ]
 
 def extract_discipline(class_name):
@@ -146,7 +146,8 @@ def detect_and_map_csv(df):
     last_col = None
     performer_col = None
     style_col = None
-    routine_keys = ['routine name', 'routine_name', 'routine', 'class name', 'class', 'song title', 'song name', 'dance name', 'number']
+    routine_keys = ['routine name', 'routine_name', 'routine', 'class name',
+                    'class', 'song title', 'song name', 'dance name', 'number']
     for k in routine_keys:
         if k in col_map:
             routine_col = col_map[k]
@@ -161,7 +162,8 @@ def detect_and_map_csv(df):
         if k in col_map:
             last_col = col_map[k]
             break
-    performer_keys = ['performer name', 'performer', 'dancer name', 'dancer_name', 'dancer', 'student name', 'student', 'name', 'full name', 'fullname']
+    performer_keys = ['performer name', 'performer', 'dancer name', 'dancer_name',
+                      'dancer', 'student name', 'student', 'name', 'full name', 'fullname']
     for k in performer_keys:
         if k in col_map:
             performer_col = col_map[k]
@@ -204,6 +206,7 @@ def detect_and_map_csv(df):
     return None, False
 
 _, spreadsheet = get_gsheet_client()
+
 if 'shows' not in st.session_state:
     loaded = load_from_sheets(spreadsheet)
     st.session_state.shows = loaded if loaded else {}
@@ -243,14 +246,16 @@ def calculate_conflicts(routines, warn_gap, consider_gap, min_gap=None, mix_styl
             if gap < warn_gap:
                 conflicts['danger'].append(pos2)
                 conflicts['dancer_conflicts'][dancer] = {
-                    'min_gap': gap, 'routines': [apps[j][1], apps[j+1][1]],
+                    'min_gap': gap,
+                    'routines': [apps[j][1], apps[j+1][1]],
                     'positions': [pos1, pos2]
                 }
             elif gap < consider_gap:
                 conflicts['warning'].append(pos2)
                 if dancer not in conflicts['dancer_conflicts']:
                     conflicts['dancer_conflicts'][dancer] = {
-                        'min_gap': gap, 'routines': [apps[j][1], apps[j+1][1]],
+                        'min_gap': gap,
+                        'routines': [apps[j][1], apps[j+1][1]],
                         'positions': [pos1, pos2]
                     }
     for i in range(len(routines) - 1):
@@ -306,9 +311,39 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
     return score
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """v10: Maximum strength optimizer with extended time and deeper search."""
+    """v13: Segment-aware optimizer that splits show at intermissions and optimizes each half independently."""
     if not routines:
         return routines
+    # Split into segments at intermissions
+    segments = []
+    current_seg = []
+    intermission_positions = []
+    for r in routines:
+        if r.get('is_intermission'):
+            segments.append(current_seg)
+            intermission_positions.append(r)
+            current_seg = []
+        else:
+            current_seg.append(r)
+    segments.append(current_seg)
+    # Optimize each segment independently
+    optimized_segments = []
+    for seg in segments:
+        if not seg:
+            optimized_segments.append([])
+            continue
+        optimized_seg = _optimize_segment(seg, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
+        optimized_segments.append(optimized_seg)
+    # Reassemble with intermissions
+    result = []
+    for i, seg in enumerate(optimized_segments):
+        result.extend(seg)
+        if i < len(intermission_positions):
+            result.append(intermission_positions[i])
+    return result
+
+def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spread_teams):
+    """Optimize a single segment (no intermissions within)."""
     locked_positions = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -328,9 +363,8 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                 continue
             for dn in r.get('dancers', []):
                 if dn in dancer_last:
-                    if not has_intermission_between(order, dancer_last[dn], i):
-                        if i - dancer_last[dn] < min_gap:
-                            v += 1
+                    if i - dancer_last[dn] < min_gap:
+                        v += 1
                 dancer_last[dn] = i
             if is_team_routine(r) and i > 0:
                 prev = order[i-1]
@@ -343,34 +377,87 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                         v += 1
         return v
 
-    def check_slot_valid(slot, routine, dancer_positions, result):
-        if routine.get('is_intermission'):
-            return True
-        for dn in routine.get('dancers', []):
-            if dn in dancer_positions:
-                for prev_pos in dancer_positions[dn]:
-                    if abs(slot - prev_pos) < min_gap:
-                        if not has_intermission_between(result, prev_pos, slot):
-                            return False
-        if is_team_routine(routine):
-            if slot > 0 and result[slot-1] is not None:
-                if not result[slot-1].get('is_intermission') and is_team_routine(result[slot-1]):
-                    return False
-            if slot < len(result) - 1 and result[slot+1] is not None:
-                if not result[slot+1].get('is_intermission') and is_team_routine(result[slot+1]):
-                    return False
-        if mix_styles and routine.get('style'):
-            if slot > 0 and result[slot-1] is not None:
-                if not result[slot-1].get('is_intermission'):
-                    if result[slot-1].get('style') == routine['style']:
-                        return False
-            if slot < len(result) - 1 and result[slot+1] is not None:
-                if not result[slot+1].get('is_intermission'):
-                    if result[slot+1].get('style') == routine['style']:
-                        return False
-        return True
+    def weighted_violations(order):
+        wv = 0
+        dancer_last = {}
+        for i, r in enumerate(order):
+            if r.get('is_intermission'):
+                continue
+            for dn in r.get('dancers', []):
+                if dn in dancer_last:
+                    d = i - dancer_last[dn]
+                    if d < min_gap:
+                        wv += (min_gap - d + 1) ** 2
+                dancer_last[dn] = i
+            if is_team_routine(r) and i > 0:
+                prev = order[i-1]
+                if not prev.get('is_intermission') and is_team_routine(prev):
+                    wv += 50
+            if mix_styles and i > 0:
+                prev = order[i-1]
+                if not prev.get('is_intermission'):
+                    if r.get('style') and prev.get('style') and r['style'] == prev['style']:
+                        wv += 10
+        return wv
 
-    def greedy_build(shuffled_unlocked):
+    def get_violating_indices(order):
+        bad = set()
+        dancer_last = {}
+        for i, r in enumerate(order):
+            if r.get('is_intermission'):
+                continue
+            for dn in r.get('dancers', []):
+                if dn in dancer_last:
+                    if i - dancer_last[dn] < min_gap:
+                        bad.add(i)
+                        bad.add(dancer_last[dn])
+                dancer_last[dn] = i
+            if is_team_routine(r) and i > 0:
+                prev = order[i-1]
+                if not prev.get('is_intermission') and is_team_routine(prev):
+                    bad.add(i)
+            if mix_styles and i > 0:
+                prev = order[i-1]
+                if not prev.get('is_intermission'):
+                    if r.get('style') and prev.get('style') and r['style'] == prev['style']:
+                        bad.add(i)
+        return bad
+
+    # Build dancer conflict graph to prioritize hardest routines
+    dancer_to_routines = {}
+    for r in unlocked:
+        for dn in r.get('dancers', []):
+            if dn not in dancer_to_routines:
+                dancer_to_routines[dn] = []
+            dancer_to_routines[dn].append(r)
+    # Sort unlocked: routines with most-shared dancers first (hardest to place)
+    def routine_difficulty(r):
+        if r.get('is_intermission'):
+            return 0
+        return sum(len(dancer_to_routines.get(dn, [])) for dn in r.get('dancers', []))
+
+    time_limit = min(55, max(30, n_total))
+    start_time = time.time()
+    best_order = None
+    best_violations = float('inf')
+    best_wv = float('inf')
+
+    for iteration in range(5000):
+        if time.time() - start_time >= time_limit:
+            break
+        # Strategy 1: Difficulty-sorted with randomization
+        shuffled = unlocked[:]
+        if iteration % 3 == 0:
+            shuffled.sort(key=routine_difficulty, reverse=True)
+            # Add small random perturbation to break ties
+            for i in range(len(shuffled) - 1):
+                if random.random() < 0.3:
+                    j = min(i + random.randint(1, 3), len(shuffled) - 1)
+                    shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+        else:
+            random.shuffle(shuffled)
+
+        # Greedy placement
         result = [None] * n_total
         for pos, r in locked_positions.items():
             result[pos] = r
@@ -382,160 +469,91 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     if dn not in dancer_positions:
                         dancer_positions[dn] = []
                     dancer_positions[dn].append(pos)
-        remaining = list(shuffled_unlocked)
-        deferred = []
+
+        remaining = list(shuffled)
         for slot in open_slots:
             if not remaining:
                 break
             best_idx = -1
-            best_soft = float('inf')
+            best_cost = float('inf')
             for idx, routine in enumerate(remaining):
-                if not check_slot_valid(slot, routine, dancer_positions, result):
-                    continue
-                soft = 0
-                if separate_ages and not routine.get('is_intermission'):
-                    ag = routine.get('age_group', 'Unknown')
-                    if ag != 'Unknown':
-                        for prev_s in range(max(0, slot - age_gap + 1), slot):
-                            if result[prev_s] is not None and not result[prev_s].get('is_intermission'):
-                                if result[prev_s].get('age_group') == ag:
-                                    soft += 1000
-                if soft < best_soft:
-                    best_soft = soft
+                cost = 0
+                ok = True
+                for dn in routine.get('dancers', []):
+                    if dn in dancer_positions:
+                        for pp in dancer_positions[dn]:
+                            d = abs(slot - pp)
+                            if d < min_gap:
+                                cost += (min_gap - d) * 100
+                if is_team_routine(routine):
+                    if slot > 0 and result[slot-1] is not None:
+                        if not result[slot-1].get('is_intermission') and is_team_routine(result[slot-1]):
+                            cost += 500
+                if mix_styles and routine.get('style'):
+                    if slot > 0 and result[slot-1] is not None:
+                        if not result[slot-1].get('is_intermission'):
+                            if result[slot-1].get('style') == routine['style']:
+                                cost += 200
+                if cost < best_cost:
+                    best_cost = cost
                     best_idx = idx
-            if best_idx == -1:
-                deferred.append(slot)
-                continue
-            chosen = remaining.pop(best_idx)
-            result[slot] = chosen
-            if not chosen.get('is_intermission'):
+            if best_idx >= 0:
+                chosen = remaining.pop(best_idx)
+                result[slot] = chosen
                 for dn in chosen.get('dancers', []):
                     if dn not in dancer_positions:
                         dancer_positions[dn] = []
                     dancer_positions[dn].append(slot)
-        # Second pass for deferred slots
-        if remaining and deferred:
-            for slot in deferred[:]:
-                if not remaining:
-                    break
-                best_idx = -1
-                best_soft = float('inf')
-                for idx, routine in enumerate(remaining):
-                    if not check_slot_valid(slot, routine, dancer_positions, result):
-                        continue
-                    if 0 < best_soft:
-                        best_soft = 0
-                        best_idx = idx
-                if best_idx != -1:
-                    chosen = remaining.pop(best_idx)
-                    result[slot] = chosen
-                    deferred.remove(slot)
-                    if not chosen.get('is_intermission'):
-                        for dn in chosen.get('dancers', []):
-                            if dn not in dancer_positions:
-                                dancer_positions[dn] = []
-                            dancer_positions[dn].append(slot)
-        # Force-place remaining into empty slots
-        empty_slots = [i for i in range(n_total) if result[i] is None]
-        for routine in remaining:
-            best_slot = empty_slots[0] if empty_slots else 0
-            best_v = float('inf')
-            for es in empty_slots:
-                result[es] = routine
-                v = sum(1 for dn in routine.get('dancers', []) if dn in dancer_positions for pp in dancer_positions[dn] if abs(es - pp) < min_gap and not has_intermission_between(result, pp, es))
-                if is_team_routine(routine) and es > 0 and result[es-1] is not None and not result[es-1].get('is_intermission') and is_team_routine(result[es-1]): v += 10
-                if is_team_routine(routine) and es < len(result)-1 and result[es+1] is not None and not result[es+1].get('is_intermission') and is_team_routine(result[es+1]): v += 10
-                result[es] = None
-                if v < best_v:
-                    best_v = v
-                    best_slot = es
-            result[best_slot] = routine
-            empty_slots.remove(best_slot)
-            if not routine.get('is_intermission'):
-                for dn in routine.get('dancers', []):
-                    if dn not in dancer_positions:
-                        dancer_positions[dn] = []
-                    dancer_positions[dn].append(best_slot)
-        result = [r for r in result if r is not None]
-        return result
+        # Force-place any remaining
+        empty = [i for i in range(n_total) if result[i] is None]
+        for slot, routine in zip(empty, remaining):
+            result[slot] = routine
+        order = [r for r in result if r is not None]
 
-    # v10: Extended time and deeper search for zero-violation solutions
-    time_limit = 90
-    max_iterations = min(20000, max(8000, n_total * 200))
-    start_time = time.time()
-    best_order = None
-    best_violations = float('inf')
-    best_soft = float('inf')
-
-    for iteration in range(max_iterations):
-        if time.time() - start_time >= time_limit:
-            break
-        shuffled = unlocked[:]
-        random.shuffle(shuffled)
-        order = greedy_build(shuffled)
         ul_indices = [i for i, r in enumerate(order) if not r.get('locked')]
         current_v = count_violations(order)
-        # Phase 1: Random pair swaps
+
+        # Phase 1: Targeted swap repair
         if current_v > 0 and len(ul_indices) >= 2:
-            no_improve = 0
-            max_tries = len(ul_indices) * 30
-            while no_improve < max_tries and time.time() - start_time < time_limit:
+            for _ in range(len(ul_indices) * 15):
+                if time.time() - start_time >= time_limit:
+                    break
                 i_idx, j_idx = random.sample(range(len(ul_indices)), 2)
                 i, j = ul_indices[i_idx], ul_indices[j_idx]
                 order[i], order[j] = order[j], order[i]
                 new_v = count_violations(order)
                 if new_v < current_v:
                     current_v = new_v
-                    no_improve = 0
                     if current_v == 0:
                         break
                 else:
                     order[i], order[j] = order[j], order[i]
-                    no_improve += 1
-        # Phase 2: Targeted insertion repair
+
+        # Phase 2: Extract-and-reinsert violating routines
         if current_v > 0:
-            for _repair in range(100):
+            for _repair in range(60):
                 if time.time() - start_time >= time_limit or current_v == 0:
                     break
-                dancer_last = {}
-                violating = []
-                for idx_r, r in enumerate(order):
-                    if r.get('is_intermission'):
-                        continue
-                    for dn in r.get('dancers', []):
-                        if dn in dancer_last:
-                            if not has_intermission_between(order, dancer_last[dn], idx_r):
-                                if idx_r - dancer_last[dn] < min_gap:
-                                    if not r.get('locked') and idx_r not in violating:
-                                        violating.append(idx_r)
-                        dancer_last[dn] = idx_r
-                    if is_team_routine(r) and idx_r > 0:
-                        prev = order[idx_r-1]
-                        if not prev.get('is_intermission') and is_team_routine(prev):
-                            if not r.get('locked') and idx_r not in violating:
-                                violating.append(idx_r)
-                    if mix_styles and idx_r > 0:
-                        prev = order[idx_r-1]
-                        if not prev.get('is_intermission'):
-                            if r.get('style') and prev.get('style') and r['style'] == prev['style']:
-                                if not r.get('locked') and idx_r not in violating:
-                                    violating.append(idx_r)
+                bad = get_violating_indices(order)
+                violating = [i for i in bad if not order[i].get('locked')]
+                if not violating:
+                    break
                 random.shuffle(violating)
-                for vi in violating:
+                for vi in violating[:5]:
                     if time.time() - start_time >= time_limit:
                         break
                     if vi >= len(order):
                         continue
                     r = order[vi]
                     order.pop(vi)
-                    locked_in_order = {i for i, x in enumerate(order) if x.get('locked')}
+                    locked_set = {i for i, x in enumerate(order) if x.get('locked')}
                     best_pv = float('inf')
                     best_pos = vi
-                    test_positions = [k for k in range(len(order) + 1) if k not in locked_in_order]
-                    random.shuffle(test_positions)
-                    for pos in test_positions:
+                    for pos in range(len(order) + 1):
+                        if pos in locked_set:
+                            continue
                         order.insert(pos, r)
-                        pv = count_violations(order)
+                        pv = weighted_violations(order)
                         if pv < best_pv:
                             best_pv = pv
                             best_pos = pos
@@ -543,10 +561,14 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     order.insert(best_pos, r)
                     ul_indices = [i for i, x in enumerate(order) if not x.get('locked')]
                     current_v = count_violations(order)
-        # Phase 3: 3-way rotation to escape local optima
+                    if current_v == 0:
+                        break
+
+        # Phase 3: 3-way rotation
         if current_v > 0 and len(ul_indices) >= 3:
-            no_improve = 0
-            while no_improve < len(ul_indices) * 10 and time.time() - start_time < time_limit:
+            for _ in range(len(ul_indices) * 5):
+                if time.time() - start_time >= time_limit or current_v == 0:
+                    break
                 idxs = random.sample(range(len(ul_indices)), 3)
                 a, b, c = ul_indices[idxs[0]], ul_indices[idxs[1]], ul_indices[idxs[2]]
                 saved = order[a], order[b], order[c]
@@ -554,17 +576,15 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                 new_v = count_violations(order)
                 if new_v < current_v:
                     current_v = new_v
-                    no_improve = 0
-                    if current_v == 0:
-                        break
                 else:
                     order[a], order[b], order[c] = saved
-                    no_improve += 1
+
         # Phase 4: Polish soft score if zero violations
         if current_v == 0 and len(ul_indices) >= 2:
             s = score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
-            no_improve = 0
-            while no_improve < len(ul_indices) * 6 and time.time() - start_time < time_limit:
+            for _ in range(len(ul_indices) * 3):
+                if time.time() - start_time >= time_limit:
+                    break
                 i_idx, j_idx = random.sample(range(len(ul_indices)), 2)
                 i, j = ul_indices[i_idx], ul_indices[j_idx]
                 order[i], order[j] = order[j], order[i]
@@ -572,21 +592,20 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     new_s = score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
                     if new_s < s:
                         s = new_s
-                        no_improve = 0
                     else:
                         order[i], order[j] = order[j], order[i]
-                        no_improve += 1
                 else:
                     order[i], order[j] = order[j], order[i]
-                    no_improve += 1
+
         v = count_violations(order)
-        s = score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
-        if v < best_violations or (v == best_violations and s < best_soft):
+        wv = weighted_violations(order)
+        if v < best_violations or (v == best_violations and wv < best_wv):
             best_violations = v
-            best_soft = s
+            best_wv = wv
             best_order = order[:]
-        if best_violations == 0 and time.time() - start_time > 20:
+        if best_violations == 0 and time.time() - start_time > 10:
             break
+
     return best_order if best_order else routines
 
 if spreadsheet:
@@ -650,12 +669,13 @@ with st.sidebar:
                 st.rerun()
 
 if (not st.session_state.current_show or
-        st.session_state.current_show not in st.session_state.shows):
+    st.session_state.current_show not in st.session_state.shows):
     st.info("Create or select a show from the sidebar")
     st.stop()
 
 show = st.session_state.shows[st.session_state.current_show]
 st.header(show['name'])
+
 tab1, tab2, tab3, tab4 = st.tabs(["Upload", "Show Order", "Conflicts", "Reports"])
 
 with tab1:
@@ -664,7 +684,7 @@ with tab1:
         "**Supported formats:**\n"
         "- **Jackrabbit Enrollment CSV** \u2014 columns: "
         "`Class Name`, `Student First Name`, `Student Last Name`\n"
-        "  - *Discipline (Jazz, Acro, Hip Hop, etc.) is auto-detected from the Class Name*\n"
+        " - *Discipline (Jazz, Acro, Hip Hop, etc.) is auto-detected from the Class Name*\n"
         "- **Jackrabbit Recital Export** \u2014 columns: `Routine`, `Performer Name`\n"
         "- **Grid-style CSV** \u2014 columns: `Class Name`, `Student Name`\n"
         "- **App format** \u2014 columns: `routine_name`, `style`, `dancer_name`"
@@ -886,11 +906,11 @@ with tab3:
                 if already_in_min:
                     continue
                 emoji = "\u26a0\ufe0f WARNING" if info['min_gap'] < show['warn_gap'] else "!"
-                st.write(f"{emoji} **{dancer}**: {info['min_gap']}-routine gap {info['positions'][0]+1}. {info['routines'][0]} to {info['positions'][1]+1}. {info['routines'][1]})")
+                st.write(f"{emoji} **{dancer}**: {info['min_gap']}-routine gap {info['positions'][0]+1}. {info['routines'][0]} to {info['positions'][1]+1}. {info['routines'][1]}")
         if (not conflicts['dancer_conflicts'] and not age_warnings
-                and not conflicts.get('team_backtoback')
-                and not conflicts.get('min_gap_violations')
-                and not conflicts.get('style_backtoback')):
+            and not conflicts.get('team_backtoback')
+            and not conflicts.get('min_gap_violations')
+            and not conflicts.get('style_backtoback')):
             st.success("No conflicts!")
 
 with tab4:
