@@ -306,7 +306,7 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
     return score
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """v9: Stronger optimizer with multi-strategy repair and longer runtime."""
+    """v10: Maximum strength optimizer with extended time and deeper search."""
     if not routines:
         return routines
     locked_positions = {}
@@ -447,9 +447,9 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
         result = [r for r in result if r is not None]
         return result
 
-    # v9: Longer time limit and more iterations for thorough search
-    time_limit = min(45, max(25, n_total // 2))
-    max_iterations = min(8000, max(4000, n_total * 100))
+    # v10: Extended time and deeper search for zero-violation solutions
+    time_limit = min(90, max(45, n_total))
+    max_iterations = min(20000, max(8000, n_total * 200))
     start_time = time.time()
     best_order = None
     best_violations = float('inf')
@@ -466,7 +466,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
         # Phase 1: Random pair swaps
         if current_v > 0 and len(ul_indices) >= 2:
             no_improve = 0
-            max_tries = len(ul_indices) * 12
+            max_tries = len(ul_indices) * 30
             while no_improve < max_tries and time.time() - start_time < time_limit:
                 i_idx, j_idx = random.sample(range(len(ul_indices)), 2)
                 i, j = ul_indices[i_idx], ul_indices[j_idx]
@@ -482,7 +482,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     no_improve += 1
         # Phase 2: Targeted insertion repair
         if current_v > 0:
-            for _repair in range(40):
+            for _repair in range(100):
                 if time.time() - start_time >= time_limit or current_v == 0:
                     break
                 dancer_last = {}
@@ -521,7 +521,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     best_pos = vi
                     test_positions = [k for k in range(len(order) + 1) if k not in locked_in_order]
                     random.shuffle(test_positions)
-                    for pos in test_positions[:min(len(test_positions), 60)]:
+                    for pos in test_positions:
                         order.insert(pos, r)
                         pv = count_violations(order)
                         if pv < best_pv:
@@ -534,7 +534,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
         # Phase 3: 3-way rotation to escape local optima
         if current_v > 0 and len(ul_indices) >= 3:
             no_improve = 0
-            while no_improve < len(ul_indices) * 4 and time.time() - start_time < time_limit:
+            while no_improve < len(ul_indices) * 10 and time.time() - start_time < time_limit:
                 idxs = random.sample(range(len(ul_indices)), 3)
                 a, b, c = ul_indices[idxs[0]], ul_indices[idxs[1]], ul_indices[idxs[2]]
                 saved = order[a], order[b], order[c]
@@ -552,7 +552,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
         if current_v == 0 and len(ul_indices) >= 2:
             s = score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
             no_improve = 0
-            while no_improve < len(ul_indices) * 3 and time.time() - start_time < time_limit:
+            while no_improve < len(ul_indices) * 6 and time.time() - start_time < time_limit:
                 i_idx, j_idx = random.sample(range(len(ul_indices)), 2)
                 i, j = ul_indices[i_idx], ul_indices[j_idx]
                 order[i], order[j] = order[j], order[i]
@@ -573,7 +573,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
             best_violations = v
             best_soft = s
             best_order = order[:]
-        if best_violations == 0 and time.time() - start_time > 8:
+        if best_violations == 0 and time.time() - start_time > 20:
             break
     return best_order if best_order else routines
 
