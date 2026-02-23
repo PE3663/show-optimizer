@@ -437,18 +437,30 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                             dancer_positions[dn].append(slot)
         # Force-place remaining into empty slots
         empty_slots = [i for i in range(n_total) if result[i] is None]
-        for slot, routine in zip(empty_slots, remaining):
-            result[slot] = routine
+        for routine in remaining:
+            best_slot = empty_slots[0] if empty_slots else 0
+            best_v = float('inf')
+            for es in empty_slots:
+                result[es] = routine
+                v = sum(1 for dn in routine.get('dancers', []) if dn in dancer_positions for pp in dancer_positions[dn] if abs(es - pp) < min_gap and not has_intermission_between(result, pp, es))
+                if is_team_routine(routine) and es > 0 and result[es-1] is not None and not result[es-1].get('is_intermission') and is_team_routine(result[es-1]): v += 10
+                if is_team_routine(routine) and es < len(result)-1 and result[es+1] is not None and not result[es+1].get('is_intermission') and is_team_routine(result[es+1]): v += 10
+                result[es] = None
+                if v < best_v:
+                    best_v = v
+                    best_slot = es
+            result[best_slot] = routine
+            empty_slots.remove(best_slot)
             if not routine.get('is_intermission'):
                 for dn in routine.get('dancers', []):
                     if dn not in dancer_positions:
                         dancer_positions[dn] = []
-                    dancer_positions[dn].append(slot)
+                    dancer_positions[dn].append(best_slot)
         result = [r for r in result if r is not None]
         return result
 
     # v10: Extended time and deeper search for zero-violation solutions
-    time_limit = min(90, max(45, n_total))
+    time_limit = 90
     max_iterations = min(20000, max(8000, n_total * 200))
     start_time = time.time()
     best_order = None
