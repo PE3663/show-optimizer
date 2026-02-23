@@ -85,11 +85,11 @@ def load_from_sheets(spreadsheet):
 
 DANCE_DISCIPLINES = [
     'hip hop', 'musical theatre', 'music theatre',
-    'contemporary', 'acro', 'acrobatic', 'jazz',
-    'ballet', 'tap', 'lyrical', 'modern', 'theatre',
-    'theater', 'pointe', 'funk', 'breakdance',
-    'ballroom', 'latin', 'salsa', 'pom', 'kick',
-    'tumbling', 'stunting', 'lifts', 'cheer', 'stretch',
+    'contemporary', 'acro', 'acrobatic', 'jazz', 'ballet',
+    'tap', 'lyrical', 'modern', 'theatre', 'theater',
+    'pointe', 'funk', 'breakdance', 'ballroom', 'latin',
+    'salsa', 'pom', 'kick', 'tumbling', 'stunting',
+    'lifts', 'cheer', 'stretch',
 ]
 
 def extract_discipline(class_name):
@@ -141,34 +141,33 @@ def detect_and_map_csv(df):
     style_col = None
     routine_keys = [
         'routine name', 'routine_name', 'routine',
-        'class name', 'class', 'song title',
-        'song name', 'dance name', 'number',
+        'class name', 'class', 'song title', 'song name',
+        'dance name', 'number',
     ]
     for k in routine_keys:
         if k in col_map:
             routine_col = col_map[k]
             break
     first_keys = [
-        'student first name', 'first name',
-        'student first', 'first', 'fname',
+        'student first name', 'first name', 'student first',
+        'first', 'fname',
     ]
     for k in first_keys:
         if k in col_map:
             first_col = col_map[k]
             break
     last_keys = [
-        'student last name', 'last name',
-        'student last', 'last', 'lname',
+        'student last name', 'last name', 'student last',
+        'last', 'lname',
     ]
     for k in last_keys:
         if k in col_map:
             last_col = col_map[k]
             break
     performer_keys = [
-        'performer name', 'performer',
-        'dancer name', 'dancer_name', 'dancer',
-        'student name', 'student', 'name',
-        'full name', 'fullname',
+        'performer name', 'performer', 'dancer name',
+        'dancer_name', 'dancer', 'student name', 'student',
+        'name', 'full name', 'fullname',
     ]
     for k in performer_keys:
         if k in col_map:
@@ -231,7 +230,8 @@ def calculate_conflicts(routines, warn_gap, consider_gap):
         'danger': [],
         'warning': [],
         'dancer_conflicts': {},
-        'gap_histogram': {}
+        'gap_histogram': {},
+        'team_backtoback': []
     }
     dancer_appearances = {}
     for i, routine in enumerate(routines):
@@ -262,13 +262,37 @@ def calculate_conflicts(routines, warn_gap, consider_gap):
                         'routines': [apps[j][1], apps[j+1][1]],
                         'positions': [apps[j][0], apps[j+1][0]]
                     }
+    # Detect team back-to-back
+    for i in range(len(routines) - 1):
+        r1 = routines[i]
+        r2 = routines[i + 1]
+        if r1.get('is_intermission') or r2.get('is_intermission'):
+            continue
+        if is_team_routine(r1) and is_team_routine(r2):
+            conflicts['team_backtoback'].append({
+                'pos1': i,
+                'pos2': i + 1,
+                'name1': r1['name'],
+                'name2': r2['name']
+            })
     return conflicts
+
+def count_team_backtoback(order):
+    """Count number of adjacent team routine pairs."""
+    count = 0
+    for i in range(len(order) - 1):
+        r1 = order[i]
+        r2 = order[i + 1]
+        if r1.get('is_intermission') or r2.get('is_intermission'):
+            continue
+        if is_team_routine(r1) and is_team_routine(r2):
+            count += 1
+    return count
 
 def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams=False):
     score = 0
     dancer_last = {}
     age_last = {}
-    team_last = -999
     for i, r in enumerate(order):
         if r.get('is_intermission'):
             continue
@@ -291,19 +315,17 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
             if not prev.get('is_intermission'):
                 if r.get('style') == prev.get('style'):
                     score += 5
-        if spread_teams and is_team_routine(r):
-            d = i - team_last
-            if d < 3:
-                score += (3 - d) * 500
-            team_last = i
+        # Team back-to-back is always a hard penalty
+        if is_team_routine(r) and i > 0:
+            prev = order[i-1]
+            if not prev.get('is_intermission') and is_team_routine(prev):
+                score += 200000
     return score
 
-
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """Optimize show order enforcing min_gap as a HARD constraint."""
+    """Optimize show order enforcing min_gap and no back-to-back Team routines as HARD constraints."""
     if not routines:
         return routines
-
     locked_positions = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -311,10 +333,8 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
             locked_positions[i] = r
         else:
             unlocked.append(r)
-
     if not unlocked:
         return routines
-
     n_total = len(routines)
 
     def count_violations(order):
@@ -328,10 +348,15 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     if i - dancer_last[dn] < min_gap:
                         v += 1
                 dancer_last[dn] = i
+            # Count team back-to-back as violations
+            if is_team_routine(r) and i > 0:
+                prev = order[i-1]
+                if not prev.get('is_intermission') and is_team_routine(prev):
+                    v += 1
         return v
 
-    def check_slot_valid(slot, routine, dancer_positions):
-        """Check if placing routine at slot violates min_gap."""
+    def check_slot_valid(slot, routine, dancer_positions, result):
+        """Check if placing routine at slot violates min_gap or team adjacency."""
         if routine.get('is_intermission'):
             return True
         for dn in routine.get('dancers', []):
@@ -339,15 +364,28 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                 for prev_pos in dancer_positions[dn]:
                     if abs(slot - prev_pos) < min_gap:
                         return False
+        # Check team back-to-back constraint
+        if is_team_routine(routine):
+            if slot > 0 and result[slot-1] is not None:
+                if not result[slot-1].get('is_intermission') and is_team_routine(result[slot-1]):
+                    return False
+            if slot < len(result) - 1 and result[slot+1] is not None:
+                if not result[slot+1].get('is_intermission') and is_team_routine(result[slot+1]):
+                    return False
+        # Also check if placing a non-team here would be adjacent to teams on both sides
+        # (not needed - we only block team-team adjacency)
+        # But check: if prev slot is team and this is team, blocked above
+        # Also need to check: if this is NOT team but next slot IS team, that's fine
+        # Only block: team next to team
+        if not is_team_routine(routine):
+            pass  # non-team routines have no team adjacency constraint
         return True
 
     def greedy_build(shuffled_unlocked):
         result = [None] * n_total
         for pos, r in locked_positions.items():
             result[pos] = r
-
         open_slots = [i for i in range(n_total) if result[i] is None]
-
         dancer_positions = {}
         for pos, r in locked_positions.items():
             if not r.get('is_intermission'):
@@ -355,18 +393,15 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     if dn not in dancer_positions:
                         dancer_positions[dn] = []
                     dancer_positions[dn].append(pos)
-
         remaining = list(shuffled_unlocked)
         deferred = []
-
         for slot in open_slots:
             if not remaining:
                 break
             best_idx = -1
             best_soft = float('inf')
-
             for idx, routine in enumerate(remaining):
-                if not check_slot_valid(slot, routine, dancer_positions):
+                if not check_slot_valid(slot, routine, dancer_positions, result):
                     continue
                 soft = 0
                 if mix_styles and slot > 0 and result[slot-1] is not None:
@@ -383,12 +418,9 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                 if soft < best_soft:
                     best_soft = soft
                     best_idx = idx
-
             if best_idx == -1:
-                # No valid routine for this slot - defer the slot
                 deferred.append(slot)
                 continue
-
             chosen = remaining.pop(best_idx)
             result[slot] = chosen
             if not chosen.get('is_intermission'):
@@ -396,8 +428,6 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     if dn not in dancer_positions:
                         dancer_positions[dn] = []
                     dancer_positions[dn].append(slot)
-
-        # Place deferred: try remaining routines in deferred slots
         if remaining and deferred:
             for slot in deferred:
                 if not remaining:
@@ -405,7 +435,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                 best_idx = -1
                 best_soft = float('inf')
                 for idx, routine in enumerate(remaining):
-                    if not check_slot_valid(slot, routine, dancer_positions):
+                    if not check_slot_valid(slot, routine, dancer_positions, result):
                         continue
                     soft = 0
                     if soft < best_soft:
@@ -419,8 +449,6 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                             if dn not in dancer_positions:
                                 dancer_positions[dn] = []
                             dancer_positions[dn].append(slot)
-
-        # Force-place any still remaining routines into empty slots
         empty_slots = [i for i in range(n_total) if result[i] is None]
         for slot, routine in zip(empty_slots, remaining):
             result[slot] = routine
@@ -429,7 +457,6 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                     if dn not in dancer_positions:
                         dancer_positions[dn] = []
                     dancer_positions[dn].append(slot)
-
         result = [r for r in result if r is not None]
         return result
 
@@ -442,15 +469,12 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
     for iteration in range(2000):
         if time.time() - start_time >= time_limit:
             break
-
         shuffled = unlocked[:]
         random.shuffle(shuffled)
         order = greedy_build(shuffled)
-
         ul_indices = [i for i, r in enumerate(order) if not r.get('locked')]
         current_v = count_violations(order)
-
-        # Swap repair phase - more aggressive
+        # Swap repair phase
         if current_v > 0 and len(ul_indices) >= 2:
             no_improve = 0
             max_tries = len(ul_indices) * 5
@@ -467,7 +491,6 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                 else:
                     order[i], order[j] = order[j], order[i]
                     no_improve += 1
-
         # Reinsertion repair for remaining violations
         if current_v > 0:
             for _repair in range(10):
@@ -484,6 +507,12 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                                 if not r.get('locked') and idx_r not in violating:
                                     violating.append(idx_r)
                         dancer_last[dn] = idx_r
+                    # Also flag team back-to-back violators
+                    if is_team_routine(r) and idx_r > 0:
+                        prev = order[idx_r-1]
+                        if not prev.get('is_intermission') and is_team_routine(prev):
+                            if not r.get('locked') and idx_r not in violating:
+                                violating.append(idx_r)
                 random.shuffle(violating)
                 for vi in violating:
                     if time.time() - start_time >= time_limit:
@@ -504,9 +533,8 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                             best_pos = pos
                         order.pop(pos)
                     order.insert(best_pos, r)
-                    ul_indices = [i for i, x in enumerate(order) if not x.get('locked')]
-                    current_v = count_violations(order)
-
+                ul_indices = [i for i, x in enumerate(order) if not x.get('locked')]
+                current_v = count_violations(order)
         # Soft-score optimization when violation-free
         if current_v == 0 and len(ul_indices) >= 2:
             s = score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
@@ -526,16 +554,14 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
                 else:
                     order[i], order[j] = order[j], order[i]
                     no_improve += 1
-
         v = count_violations(order)
         s = score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
         if v < best_violations or (v == best_violations and s < best_soft):
             best_violations = v
             best_soft = s
             best_order = order[:]
-            if best_violations == 0 and time.time() - start_time > 3:
-                break
-
+        if best_violations == 0 and time.time() - start_time > 3:
+            break
     return best_order if best_order else routines
 
 if spreadsheet:
@@ -584,7 +610,7 @@ with st.sidebar:
         show['separate_ages'] = st.checkbox("Separate age groups", value=show.get('separate_ages', True))
         if show['separate_ages']:
             show['age_gap'] = st.number_input("Age group min gap", value=show.get('age_gap', 2), min_value=1, max_value=10, help="Min routines between same age groups")
-        show['spread_teams'] = st.checkbox("Spread team routines", value=show.get('spread_teams', False), help="Keep team routines spaced apart")
+        st.info("Team routines are never placed back-to-back")
         st.divider()
         if st.button("OPTIMIZE", type="primary", use_container_width=True):
             if not show['routines']:
@@ -816,6 +842,12 @@ with tab3:
                             f"#{i+1} {r['name']} [{curr_age}] is only "
                             f"{i-j} away from #{j+1} {r_list[j]['name']} [{prev_age}]"
                         )
+        # Team back-to-back warnings
+        if conflicts.get('team_backtoback'):
+            st.markdown("**Team Back-to-Back:**")
+            for tb in conflicts['team_backtoback']:
+                st.write(f"\u26a0\ufe0f #{tb['pos1']+1} {tb['name1']} and #{tb['pos2']+1} {tb['name2']} are back-to-back Team routines")
+            st.divider()
         if age_warnings:
             st.markdown("**Age Group Proximity:**")
             for w in age_warnings:
@@ -830,7 +862,7 @@ with tab3:
                     f"{info['positions'][0]+1}. {info['routines'][0]} to "
                     f"{info['positions'][1]+1}. {info['routines'][1]})"
                 )
-        if not conflicts['dancer_conflicts'] and not age_warnings:
+        if not conflicts['dancer_conflicts'] and not age_warnings and not conflicts.get('team_backtoback'):
             st.success("No conflicts!")
 
 with tab4:
@@ -851,8 +883,7 @@ with tab4:
                 dancer_routines[dancer].append((i, r['name']))
         report_type = st.selectbox(
             "Select Report Type",
-            ["Program Order", "Roster", "Check-In", "Check-Out",
-             "Program Schedule", "Quick Change Schedule", "Performer Schedules"]
+            ["Program Order", "Roster", "Check-In", "Check-Out", "Program Schedule", "Quick Change Schedule", "Performer Schedules"]
         )
         st.divider()
         if report_type == "Program Order":
@@ -892,8 +923,6 @@ with tab4:
                 if routines:
                     first_pos, first_routine = routines[0]
                     checkin_data.append({'Performer': dancer, 'First Routine #': first_pos + 1, 'First Routine Name': first_routine})
-            df_checkin = pd.DataFrame(checkin_data)
-            st.dataframe(df_checkin, use_container_width=True, hide_index=True)
             csv = df_checkin.to_csv(index=False)
             st.download_button("Download CSV", csv, f"{show['name']}_checkin.csv", "text/csv")
         elif report_type == "Check-Out":
@@ -986,3 +1015,7 @@ with tab4:
             df_performer = pd.DataFrame(performer_data)
             csv = df_performer.to_csv(index=False)
             st.download_button("Download CSV", csv, f"{show['name']}_performer_schedules.csv", "text/csv")
+            df_checkin = pd.DataFrame(checkin_data)
+            st.dataframe(df_checkin, use_container_width=True, hide_index=True)
+            csv = df_checkin.to_csv(index=False)
+            st.download_button("Download CSV", csv, f"{show['name']}_checkin.csv", "text/csv")
