@@ -923,7 +923,7 @@ with tab4:
                 if routines:
                     first_pos, first_routine = routines[0]
                     checkin_data.append({'Performer': dancer, 'First Routine #': first_pos + 1, 'First Routine Name': first_routine})
-        df_checkin = pd.DataFrame(checkin_data)
+                df_checkin = pd.DataFrame(checkin_data)
                     st.dataframe(df_checkin, use_container_width=True, hide_index=True)
             csv = df_checkin.to_csv(index=False)
             st.download_button("Download CSV", csv, f"{show['name']}_checkin.csv", "text/csv")
