@@ -865,6 +865,7 @@ with tab1:
                 else:
                     st.success("Format detected.")
                 st.dataframe(mapped_df.head(10))
+                        import_mode = st.radio("Import mode", ["Replace all routines", "Add to existing show"], horizontal=True, key="import_mode")
                 if st.button("Import", type="primary"):
                     routines = {}
                     for _, row in mapped_df.iterrows():
@@ -886,7 +887,33 @@ with tab1:
                         dancer = str(row['dancer_name']).strip()
                         if dancer and dancer != 'nan' and dancer not in routines[name]['dancers']:
                             routines[name]['dancers'].append(dancer)
-                    show['routines'] = list(routines.values())
+                        new_routines = list(routines.values())
+                        if import_mode == "Add to existing show" and show['routines']:
+                            existing_names = {r['name'] for r in show['routines']}
+                            for nr in new_routines:
+                                if nr['name'] not in existing_names:
+                                    show['routines'].append(nr)
+                                else:
+                                    for er in show['routines']:
+                                        if er['name'] == nr['name']:
+                                            for d in nr['dancers']:
+                                                if d not in er['dancers']:
+                                                    er['dancers'].append(d)
+                                            break
+                            if show['optimized']:
+                                for nr in new_routines:
+                                    if nr['name'] not in {r['name'] for r in show['optimized']}:
+                                        show['optimized'].append(nr)
+                                    else:
+                                        for er in show['optimized']:
+                                            if er['name'] == nr['name']:
+                                                for d in nr['dancers']:
+                                                    if d not in er['dancers']:
+                                                        er['dancers'].append(d)
+                                                break
+                        else:
+                            show['routines'] = new_routines
+                            show['optimized'] = []
                     for i, r in enumerate(show['routines']):
                         r['order'] = i + 1
                     save_to_sheets(spreadsheet, st.session_state.shows)
