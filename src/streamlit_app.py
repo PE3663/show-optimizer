@@ -448,7 +448,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                         if not result[slot-1].get('is_intermission'):
                             if result[slot-1].get('style') == routine['style']:
                                 cost += 50000
-                if cost < best_cost:
+                if cost < best_cost or (cost == best_cost and random.random() < 0.3):
                     best_cost = cost
                     best_idx = idx
             chosen = remaining.pop(best_idx)
@@ -469,7 +469,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
     best_cost = float('inf')
 
     # Multi-start: try different initial orderings
-    for restart in range(200):
+    for restart in range(30):
         if time.time() - start_time >= time_limit:
             break
         # Create initial ordering
@@ -477,7 +477,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         if restart == 0:
             # First try: sort by difficulty (most constrained first)
             shuffled.sort(key=lambda r: sum(len(dancer_to_routines.get(dn, [])) for dn in r.get('dancers', [])), reverse=True)
-        elif restart % 4 == 1:
+        elif restart % 3 == 1:
             # Spread by style
             style_groups = {}
             for r in unlocked:
@@ -507,9 +507,9 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         current_cost = weighted_cost(order)
         current_v = count_violations(order)
         T = max(current_cost * 0.3, 500000.0)
-        cooling = 0.9998
+        cooling = 0.99997
         min_T = 0.1
-        sa_steps = min(300000, len(ul_indices) * 2000)
+        sa_steps = min(300000, len(ul_indices) * 8000)
 
         for step in range(sa_steps):
             if time.time() - start_time >= time_limit:
