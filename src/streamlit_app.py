@@ -805,7 +805,7 @@ with st.sidebar:
                 st.warning("No routines to optimize. Upload and import a CSV first.")
             else:
                 show['optimized'] = optimize_show(
-                    show['routines'],
+                                    show['optimized'] if show['optimized'] else show['routines'],
                     show['min_gap'],
                     show['mix_styles'],
                     show.get('separate_ages', True),
@@ -1014,7 +1014,7 @@ with tab2:
                     st.warning("No routines to optimize.")
                 else:
                     show['optimized'] = optimize_show(
-                        show['routines'],
+                                            show['optimized'] if show['optimized'] else show['routines'],
                         show['min_gap'],
                         show['mix_styles'],
                         show.get('separate_ages', True),
