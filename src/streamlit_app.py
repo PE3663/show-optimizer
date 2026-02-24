@@ -910,7 +910,8 @@ with tab1:
                     for i, r in enumerate(show['routines']):
                         r['order'] = i + 1
                     save_to_sheets(spreadsheet, st.session_state.shows)
-                    st.success(f"Imported {len(show['routines'])} routines!")
+                    st.success(f"\u2705 Import Complete! {len(show['routines'])} routines imported successfully.")
+                    st.balloons()
                     st.rerun()
             else:
                 st.error("Could not detect CSV format.")
