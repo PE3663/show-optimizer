@@ -344,7 +344,7 @@ def _count_total_violations(order, min_gap, mix_styles, separate_ages, age_gap):
     v = 0
     dancer_last = {}
     for i, r in enumerate(order):
-        if r.get('is_intermission') or r.get('locked'):
+        if r.get('is_intermission'):
             continue
         for dn in r.get('dancers', []):
             if dn in dancer_last:
@@ -510,7 +510,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
     if best_order is None:
         best_order = list(routines)
     ul_indices = [i for i, r in enumerate(best_order) if not r.get('locked') and not r.get('is_intermission')]
-    if len(ul_indices) >= 2 and best_violations > 0:
+    if len(ul_indices) >= 2 and (best_violations > 0 or best_cost > 0):
         current_cost = _weighted_cost(best_order, min_gap, mix_styles, separate_ages, age_gap)
         T = max(current_cost * 0.3, 500000.0)
         cooling = 0.9995
