@@ -92,14 +92,14 @@ DANCE_DISCIPLINES = [
 ]
 
 def extract_discipline(class_name):
-    name_lower = class_name.strip().lower()
+    name_lower = str(class_name).strip().lower()
     for disc in DANCE_DISCIPLINES:
         if disc in name_lower:
             return disc.title()
     return 'General'
 
 def extract_age_group(routine_name):
-    name = routine_name.strip()
+    name = str(routine_name).strip()
     m = re.search(r'(\d+\s*[-\u2013]\s*\d+)\s*[Yy]', name)
     if m:
         return m.group(1).replace(' ', '') + 'Yrs'
@@ -805,7 +805,7 @@ with st.sidebar:
                 st.warning("No routines to optimize. Upload and import a CSV first.")
             else:
                 show['optimized'] = optimize_show(
-                    show['optimized'] if show['optimized'] else show['routines'],
+                    show['routines'],
                     show['min_gap'],
                     show['mix_styles'],
                     show.get('separate_ages', True),
@@ -1013,7 +1013,7 @@ with tab2:
                     st.warning("No routines to optimize.")
                 else:
                     show['optimized'] = optimize_show(
-                        show['optimized'] if show['optimized'] else show['routines'],
+                        show['routines'],
                         show['min_gap'],
                         show['mix_styles'],
                         show.get('separate_ages', True),
@@ -1086,6 +1086,30 @@ with tab3:
             and not conflicts.get('min_gap_violations')
             and not conflicts.get('style_backtoback')):
             st.success("No conflicts!")
+
+        st.divider()
+        st.markdown("**Dancer Gap Distribution**")
+        if conflicts['gap_histogram']:
+            max_gap = max(conflicts['gap_histogram'].keys())
+            gap_labels = list(range(1, max_gap + 1))
+            gap_counts = [conflicts['gap_histogram'].get(g, 0) for g in gap_labels]
+            chart_df = pd.DataFrame({'Gap (routines)': gap_labels, 'Count': gap_counts})
+            chart_df = chart_df.set_index('Gap (routines)')
+            colors = []
+            for g in gap_labels:
+                if g < show['min_gap']:
+                    colors.append('#ff4b4b')
+                elif g < show['warn_gap']:
+                    colors.append('#ffa726')
+                else:
+                    colors.append('#4caf50')
+            st.bar_chart(chart_df)
+            col1, col2, col3 = st.columns(3)
+            col1.markdown(':red[Red = Below min gap]')
+            col2.markdown(':orange[Orange = Warning zone]')
+            col3.markdown(':green[Green = Safe]')
+        else:
+            st.info("No shared dancers between routines.")
 
 with tab4:
     st.subheader("Reports")
