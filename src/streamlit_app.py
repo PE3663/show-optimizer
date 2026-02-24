@@ -309,7 +309,7 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
     return score
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """v16: Enhanced SA optimizer with stronger penalties for team-heavy shows."""
+    """v17: Massive gap penalties to force min_gap compliance for team-heavy shows."""
     if not routines:
         return routines
     segments = []
@@ -338,7 +338,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
     return result
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spread_teams):
-    """v16: Enhanced SA with stronger penalties and longer exploration."""
+    """v17: Massive gap penalties to force min_gap compliance for team-heavy shows."""
     locked_positions = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -383,17 +383,17 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 if dn in dancer_last:
                     d = i - dancer_last[dn]
                     if d < min_gap:
-                        cost += (min_gap - d + 1) ** 4
+                        cost += (min_gap - d + 1) ** 2 * 100000
                 dancer_last[dn] = i
             if is_team_routine(r) and i > 0:
                 prev = order[i-1]
                 if not prev.get('is_intermission') and is_team_routine(prev):
-                    cost += 5000
+                    cost += 500000
             if mix_styles and i > 0:
                 prev = order[i-1]
                 if not prev.get('is_intermission'):
                     if r.get('style') and prev.get('style') and r['style'] == prev['style']:
-                        cost += 1000
+                        cost += 50000
             if separate_ages:
                 ag = r.get('age_group', 'Unknown')
                 if ag != 'Unknown' and ag in age_last:
@@ -438,11 +438,11 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                         for pp in dancer_positions[dn]:
                             d = abs(slot - pp)
                             if d < min_gap:
-                                cost += (min_gap - d) ** 2 * 10
+                                cost += (min_gap - d) ** 2 * 100000
                 if is_team_routine(routine):
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission') and is_team_routine(result[slot-1]):
-                            cost += 5000
+                            cost += 500000
                 if mix_styles and routine.get('style'):
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission'):
@@ -506,7 +506,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         # Simulated annealing
         current_cost = weighted_cost(order)
         current_v = count_violations(order)
-        T = max(5000.0, current_cost * 0.8)
+        T = max(current_cost * 0.5, 500000.0)
         cooling = 0.9995
         min_T = 0.1
         sa_steps = min(200000, len(ul_indices) * 1500)
