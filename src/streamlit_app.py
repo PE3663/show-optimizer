@@ -375,6 +375,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
     def weighted_cost(order):
         cost = 0
         dancer_last = {}
+        age_last = {}
         for i, r in enumerate(order):
             if r.get('is_intermission'):
                 continue
@@ -393,6 +394,14 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 if not prev.get('is_intermission'):
                     if r.get('style') and prev.get('style') and r['style'] == prev['style']:
                         cost += 100
+            if separate_ages:
+                ag = r.get('age_group', 'Unknown')
+                if ag != 'Unknown' and ag in age_last:
+                    d = i - age_last[ag]
+                    if d < age_gap:
+                        cost += (age_gap - d) * 50
+                if ag != 'Unknown':
+                    age_last[ag] = i
         return cost
 
     # Build dancer-to-routine mapping for smart placement
