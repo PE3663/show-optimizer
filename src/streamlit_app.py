@@ -287,7 +287,7 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
                 if not has_intermission_between(order, dancer_last[dn], i):
                     d = i - dancer_last[dn]
                     if d < min_gap:
-                        score += (min_gap - d) ** 2 * 1000000
+                        score += (min_gap - d) ** 3 * 1000000
             dancer_last[dn] = i
         if separate_ages:
             ag = r.get('age_group', 'Unknown')
@@ -329,7 +329,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
             optimized_segments.append([])
             continue
         optimized_seg = _optimize_segment(seg, min_gap, mix_styles, separate_ages, age_gap, spread_teams)
-        optimized_segments.append(optimized_seg)
+        optimized_segments.append(optimized_seg if optimized_seg is not None else seg)
     result = []
     for i, seg in enumerate(optimized_segments):
         result.extend(seg)
@@ -383,7 +383,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 if dn in dancer_last:
                     d = i - dancer_last[dn]
                     if d < min_gap:
-                        cost += (min_gap - d) ** 2 * 200000
+                        cost += (min_gap - d) ** 3 * 1000000
                 dancer_last[dn] = i
             if is_team_routine(r) and i > 0:
                 prev = order[i-1]
@@ -438,7 +438,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                         for pp in dancer_positions[dn]:
                             d = abs(slot - pp)
                             if d < min_gap:
-                                cost += (min_gap - d) ** 2 * 200000
+                                cost += (min_gap - d) ** 3 * 1000000
                 if is_team_routine(routine):
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission') and is_team_routine(result[slot-1]):
@@ -507,7 +507,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         current_cost = weighted_cost(order)
         current_v = count_violations(order)
         T = max(current_cost * 0.3, 500000.0)
-        cooling = 0.9995
+        cooling = 0.9998
         min_T = 0.1
         sa_steps = min(300000, len(ul_indices) * 2000)
 
@@ -585,7 +585,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         if best_violations == 0 and best_cost == 0 and time.time() - start_time > 20:
             break
 
-            return best_order if best_order else routines
+            return best_order if best_order is not None else routines
 
 if spreadsheet:
     st.sidebar.success("Google Sheets backup: Connected")
