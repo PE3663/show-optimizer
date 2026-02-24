@@ -287,7 +287,7 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
                 if not has_intermission_between(order, dancer_last[dn], i):
                     d = i - dancer_last[dn]
                     if d < min_gap:
-                        score += (min_gap - d) * 100000
+                        score += (min_gap - d) * 500000
             dancer_last[dn] = i
         if separate_ages:
             ag = r.get('age_group', 'Unknown')
@@ -305,11 +305,11 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
         if is_team_routine(r) and i > 0:
             prev = order[i-1]
             if not prev.get('is_intermission') and is_team_routine(prev):
-                score += 200000
+                score += 500000
     return score
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """v14: Simulated annealing optimizer with constraint-aware initial placement."""
+    """v16: Enhanced SA optimizer with stronger penalties for team-heavy shows."""
     if not routines:
         return routines
     segments = []
@@ -338,7 +338,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
     return result
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spread_teams):
-    """v14: Simulated annealing with smart initial placement."""
+    """v16: Enhanced SA with stronger penalties and longer exploration."""
     locked_positions = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -383,17 +383,17 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 if dn in dancer_last:
                     d = i - dancer_last[dn]
                     if d < min_gap:
-                        cost += (min_gap - d + 1) ** 3
+                        cost += (min_gap - d + 1) ** 4
                 dancer_last[dn] = i
             if is_team_routine(r) and i > 0:
                 prev = order[i-1]
                 if not prev.get('is_intermission') and is_team_routine(prev):
-                    cost += 500
+                    cost += 5000
             if mix_styles and i > 0:
                 prev = order[i-1]
                 if not prev.get('is_intermission'):
                     if r.get('style') and prev.get('style') and r['style'] == prev['style']:
-                        cost += 100
+                        cost += 1000
             if separate_ages:
                 ag = r.get('age_group', 'Unknown')
                 if ag != 'Unknown' and ag in age_last:
@@ -442,7 +442,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 if is_team_routine(routine):
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission') and is_team_routine(result[slot-1]):
-                            cost += 500
+                            cost += 5000
                 if mix_styles and routine.get('style'):
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission'):
@@ -462,14 +462,14 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
             result[slot] = routine
         return [r for r in result if r is not None]
 
-    time_limit = min(55, max(30, n_total))
+    time_limit = min(120, max(45, n_total * 2))
     start_time = time.time()
     best_order = None
     best_violations = float('inf')
     best_cost = float('inf')
 
     # Multi-start: try different initial orderings
-    for restart in range(200):
+    for restart in range(500):
         if time.time() - start_time >= time_limit:
             break
         # Create initial ordering
@@ -506,15 +506,15 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         # Simulated annealing
         current_cost = weighted_cost(order)
         current_v = count_violations(order)
-        T = max(500.0, current_cost * 0.5)
-        cooling = 0.997
+        T = max(5000.0, current_cost * 0.8)
+        cooling = 0.9995
         min_T = 0.1
-        sa_steps = min(80000, len(ul_indices) * 600)
+        sa_steps = min(200000, len(ul_indices) * 1500)
 
         for step in range(sa_steps):
             if time.time() - start_time >= time_limit:
                 break
-            if current_v == 0 and step > sa_steps // 3:
+            if current_v == 0 and current_cost == 0 and step > sa_steps // 2:
                 break
             # Choose move type
             move_type = random.random()
@@ -582,7 +582,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
             best_violations = v
             best_cost = c
             best_order = order[:]
-        if best_violations == 0 and time.time() - start_time > 10:
+        if best_violations == 0 and best_cost == 0 and time.time() - start_time > 20:
             break
 
     return best_order if best_order else routines
