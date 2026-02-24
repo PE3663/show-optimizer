@@ -82,12 +82,13 @@ def load_from_sheets(spreadsheet):
     except Exception:
         pass
     return None
+
 DANCE_DISCIPLINES = [
     'hip hop', 'musical theatre', 'music theatre', 'contemporary',
     'acro', 'acrobatic', 'jazz', 'ballet', 'tap', 'lyrical',
-    'modern', 'theatre', 'theater', 'pointe', 'funk', 'breakdance',
-    'ballroom', 'latin', 'salsa', 'pom', 'kick', 'tumbling',
-    'stunting', 'lifts', 'cheer', 'stretch',
+    'modern', 'theatre', 'theater', 'pointe', 'funk',
+    'breakdance', 'ballroom', 'latin', 'salsa', 'pom', 'kick',
+    'tumbling', 'stunting', 'lifts', 'cheer', 'stretch',
 ]
 
 def extract_discipline(class_name):
@@ -145,8 +146,8 @@ def detect_and_map_csv(df):
     last_col = None
     performer_col = None
     style_col = None
-    routine_keys = ['routine name', 'routine_name', 'routine', 'class name', 'class',
-                    'song title', 'song name', 'dance name', 'number']
+    routine_keys = ['routine name', 'routine_name', 'routine', 'class name',
+                    'class', 'song title', 'song name', 'dance name', 'number']
     for k in routine_keys:
         if k in col_map:
             routine_col = col_map[k]
@@ -205,6 +206,7 @@ def detect_and_map_csv(df):
     return None, False
 
 _, spreadsheet = get_gsheet_client()
+
 if 'shows' not in st.session_state:
     loaded = load_from_sheets(spreadsheet)
     st.session_state.shows = loaded if loaded else {}
@@ -213,9 +215,13 @@ if 'current_show' not in st.session_state:
 
 def calculate_conflicts(routines, warn_gap, consider_gap, min_gap=None, mix_styles=False):
     conflicts = {
-        'danger': [], 'warning': [], 'dancer_conflicts': {},
-        'gap_histogram': {}, 'team_backtoback': [],
-        'min_gap_violations': [], 'style_backtoback': []
+        'danger': [],
+        'warning': [],
+        'dancer_conflicts': {},
+        'gap_histogram': {},
+        'team_backtoback': [],
+        'min_gap_violations': [],
+        'style_backtoback': []
     }
     dancer_appearances = {}
     for i, routine in enumerate(routines):
@@ -237,9 +243,13 @@ def calculate_conflicts(routines, warn_gap, consider_gap, min_gap=None, mix_styl
             conflicts['gap_histogram'][gap] += 1
             if min_gap and gap < min_gap:
                 conflicts['min_gap_violations'].append({
-                    'dancer': dancer, 'gap': gap, 'required': min_gap,
-                    'routine1': apps[j][1], 'routine2': apps[j+1][1],
-                    'pos1': pos1, 'pos2': pos2
+                    'dancer': dancer,
+                    'gap': gap,
+                    'required': min_gap,
+                    'routine1': apps[j][1],
+                    'routine2': apps[j+1][1],
+                    'pos1': pos1,
+                    'pos2': pos2
                 })
             if gap < warn_gap:
                 conflicts['danger'].append(pos2)
@@ -275,41 +285,8 @@ def calculate_conflicts(routines, warn_gap, consider_gap, min_gap=None, mix_styl
                 })
     return conflicts
 
-def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams=False):
-    score = 0
-    dancer_last = {}
-    age_last = {}
-    for i, r in enumerate(order):
-        if r.get('is_intermission'):
-            continue
-        for dn in r.get('dancers', []):
-            if dn in dancer_last:
-                if not has_intermission_between(order, dancer_last[dn], i):
-                    d = i - dancer_last[dn]
-                    if d < min_gap:
-                        score += (min_gap - d) ** 3 * 1000000
-            dancer_last[dn] = i
-        if separate_ages:
-            ag = r.get('age_group', 'Unknown')
-            if ag != 'Unknown' and ag in age_last:
-                d = i - age_last[ag]
-                if d < age_gap:
-                    score += (age_gap - d) * 1000
-            if ag != 'Unknown':
-                age_last[ag] = i
-        if mix_styles and i > 0:
-            prev = order[i-1]
-            if not prev.get('is_intermission'):
-                if r.get('style') == prev.get('style'):
-                    score += 50000
-        if is_team_routine(r) and i > 0:
-            prev = order[i-1]
-            if not prev.get('is_intermission') and is_team_routine(prev):
-                score += 500000
-    return score
-
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """v22: Added repair phase for zero violations, repair phase, tuned SA for fewer violations."""
+    """v25: Rewritten optimizer with proper constraint enforcement."""
     if not routines:
         return routines
     segments = []
@@ -338,7 +315,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
     return result
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spread_teams):
-    """v22: Added repair phase for zero violations, repair phase, tuned SA for fewer violations."""
+    """v25: Fixed optimizer - all constraints enforced with balanced penalties."""
     locked_positions = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -370,12 +347,23 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 if not prev.get('is_intermission'):
                     if r.get('style') and prev.get('style') and r['style'] == prev['style']:
                         v += 1
+            if separate_ages and i > 0:
+                ag = r.get('age_group', 'Unknown')
+                if ag != 'Unknown':
+                    for back in range(1, age_gap):
+                        if i - back < 0:
+                            break
+                        prev = order[i - back]
+                        if prev.get('is_intermission'):
+                            break
+                        if prev.get('age_group', 'Unknown') == ag:
+                            v += 1
+                            break
         return v
 
     def weighted_cost(order):
         cost = 0
         dancer_last = {}
-        age_last = {}
         for i, r in enumerate(order):
             if r.get('is_intermission'):
                 continue
@@ -393,18 +381,21 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 prev = order[i-1]
                 if not prev.get('is_intermission'):
                     if r.get('style') and prev.get('style') and r['style'] == prev['style']:
-                        cost += 50000
+                        cost += 500000
             if separate_ages:
                 ag = r.get('age_group', 'Unknown')
-                if ag != 'Unknown' and ag in age_last:
-                    d = i - age_last[ag]
-                    if d < age_gap:
-                        cost += (age_gap - d) * 50
                 if ag != 'Unknown':
-                    age_last[ag] = i
+                    for back in range(1, age_gap):
+                        if i - back < 0:
+                            break
+                        prev = order[i - back]
+                        if prev.get('is_intermission'):
+                            break
+                        if prev.get('age_group', 'Unknown') == ag:
+                            deficit = age_gap - back
+                            cost += deficit * 200000
         return cost
 
-    # Build dancer-to-routine mapping for smart placement
     dancer_to_routines = {}
     for r in unlocked:
         for dn in r.get('dancers', []):
@@ -413,7 +404,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
             dancer_to_routines[dn].append(r)
 
     def build_smart_initial(shuffled_unlocked):
-        """Place routines one by one, choosing best slot each time."""
         result = [None] * n_total
         for pos, r in locked_positions.items():
             result[pos] = r
@@ -447,8 +437,21 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission'):
                             if result[slot-1].get('style') == routine['style']:
-                                cost += 50000
-                if cost < best_cost or (cost == best_cost and random.random() < 0.3):
+                                cost += 500000
+                if separate_ages:
+                    ag = routine.get('age_group', 'Unknown')
+                    if ag != 'Unknown':
+                        for back in range(1, age_gap):
+                            if slot - back < 0:
+                                break
+                            prev = result[slot - back]
+                            if prev is None:
+                                continue
+                            if prev.get('is_intermission'):
+                                break
+                            if prev.get('age_group', 'Unknown') == ag:
+                                cost += 200000
+                if cost < best_cost:
                     best_cost = cost
                     best_idx = idx
             chosen = remaining.pop(best_idx)
@@ -468,17 +471,19 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
     best_violations = float('inf')
     best_cost = float('inf')
 
-    # Multi-start: try different initial orderings
-    for restart in range(30):
+    for restart in range(200):
         if time.time() - start_time >= time_limit:
             break
-        # Create initial ordering
         shuffled = unlocked[:]
         if restart == 0:
-            # First try: sort by difficulty (most constrained first)
-            shuffled.sort(key=lambda r: sum(len(dancer_to_routines.get(dn, [])) for dn in r.get('dancers', [])), reverse=True)
-        elif restart % 3 == 1:
-            # Spread by style
+            order = list(routines)
+        elif restart == 1:
+            shuffled.sort(key=lambda r: sum(
+                len(dancer_to_routines.get(dn, []))
+                for dn in r.get('dancers', [])
+            ), reverse=True)
+            order = build_smart_initial(shuffled)
+        elif restart % 4 == 2:
             style_groups = {}
             for r in unlocked:
                 s = r.get('style', 'General')
@@ -490,9 +495,11 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 for s in list(style_groups.keys()):
                     if style_groups[s]:
                         shuffled.append(style_groups[s].pop(0))
+            order = build_smart_initial(shuffled)
         else:
             random.shuffle(shuffled)
-        order = build_smart_initial(shuffled)
+            order = build_smart_initial(shuffled)
+
         ul_indices = [i for i, r in enumerate(order) if not r.get('locked')]
         if len(ul_indices) < 2:
             v = count_violations(order)
@@ -503,23 +510,20 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 best_order = order[:]
             continue
 
-        # Simulated annealing
         current_cost = weighted_cost(order)
         current_v = count_violations(order)
         T = max(current_cost * 0.3, 500000.0)
-        cooling = 0.99997
+        cooling = 0.9997
         min_T = 0.1
-        sa_steps = min(300000, len(ul_indices) * 8000)
+        sa_steps = min(400000, len(ul_indices) * 2500)
 
         for step in range(sa_steps):
             if time.time() - start_time >= time_limit:
                 break
-            if current_v == 0 and current_cost == 0 and step > sa_steps // 2:
+            if current_v == 0 and current_cost == 0 and step > sa_steps // 3:
                 break
-            # Choose move type
             move_type = random.random()
-            if move_type < 0.5:
-                # Swap two unlocked positions
+            if move_type < 0.6:
                 i_idx, j_idx = random.sample(range(len(ul_indices)), 2)
                 i, j = ul_indices[i_idx], ul_indices[j_idx]
                 order[i], order[j] = order[j], order[i]
@@ -530,32 +534,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                     current_v = count_violations(order)
                 else:
                     order[i], order[j] = order[j], order[i]
-            elif move_type < 0.8:
-                # Relocate: move one unlocked routine to a different position
-                src_idx = random.choice(range(len(ul_indices)))
-                src = ul_indices[src_idx]
-                r = order[src]
-                order.pop(src)
-                # Pick new position among unlocked-compatible spots
-                possible = [k for k in range(len(order) + 1) if k not in locked_positions or k == src]
-                if possible:
-                    dst = random.choice(possible)
-                    order.insert(dst, r)
-                    # Recalculate unlocked indices
-                    new_ul = [k for k, x in enumerate(order) if not x.get('locked')]
-                    new_cost = weighted_cost(order)
-                    delta = new_cost - current_cost
-                    if delta < 0 or (T > min_T and random.random() < math.exp(-delta / max(T, 0.01))):
-                        current_cost = new_cost
-                        current_v = count_violations(order)
-                        ul_indices = new_ul
-                    else:
-                        order.pop(dst)
-                        order.insert(src, r)
-                else:
-                    order.insert(src, r)
             else:
-                # Reverse a small segment of unlocked routines
                 if len(ul_indices) >= 3:
                     seg_len = random.randint(2, min(5, len(ul_indices)))
                     start_idx = random.randint(0, len(ul_indices) - seg_len)
@@ -574,20 +553,17 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                         for p, v in zip(seg_positions, values):
                             order[p] = v
             T *= cooling
-
-        # Track best
-        v = count_violations(order)
-        c = weighted_cost(order)
-        if v < best_violations or (v == best_violations and c < best_cost):
-            best_violations = v
-            best_cost = c
-            best_order = order[:]
+            v = count_violations(order)
+            c = weighted_cost(order)
+            if v < best_violations or (v == best_violations and c < best_cost):
+                best_violations = v
+                best_cost = c
+                best_order = order[:]
         if best_violations == 0 and best_cost == 0 and time.time() - start_time > 20:
             break
 
-    # Repair phase: fix remaining violations by targeted swaps
     if best_order is not None and count_violations(best_order) > 0:
-        for repair_pass in range(100):
+        for repair_pass in range(200):
             improved = False
             viol_positions = set()
             dancer_last_r = {}
@@ -609,6 +585,17 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                     if not prev.get('is_intermission'):
                         if r.get('style') and prev.get('style') and r['style'] == prev['style']:
                             viol_positions.add(i)
+                if separate_ages:
+                    ag = r.get('age_group', 'Unknown')
+                    if ag != 'Unknown':
+                        for back in range(1, age_gap):
+                            if i - back < 0:
+                                break
+                            prev = best_order[i - back]
+                            if prev.get('is_intermission'):
+                                break
+                            if prev.get('age_group', 'Unknown') == ag:
+                                viol_positions.add(i)
             if not viol_positions:
                 break
             viol_list = [p for p in viol_positions if not best_order[p].get('locked')]
@@ -629,8 +616,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                     best_order[vp], best_order[tp] = best_order[tp], best_order[vp]
             if not improved:
                 break
-            
-            return best_order if best_order is not None else routines
+    return best_order if best_order else routines
 
 if spreadsheet:
     st.sidebar.success("Google Sheets backup: Connected")
@@ -649,11 +635,16 @@ with st.sidebar:
             if new_name:
                 show_id = f"show_{len(st.session_state.shows)}"
                 st.session_state.shows[show_id] = {
-                    'name': new_name, 'warn_gap': warn_gap,
-                    'consider_gap': consider_gap, 'min_gap': min_gap,
-                    'mix_styles': mix_styles, 'separate_ages': True,
-                    'age_gap': 2, 'spread_teams': False,
-                    'routines': [], 'optimized': []
+                    'name': new_name,
+                    'warn_gap': warn_gap,
+                    'consider_gap': consider_gap,
+                    'min_gap': min_gap,
+                    'mix_styles': mix_styles,
+                    'separate_ages': True,
+                    'age_gap': 2,
+                    'spread_teams': False,
+                    'routines': [],
+                    'optimized': []
                 }
                 st.session_state.current_show = show_id
                 save_to_sheets(spreadsheet, st.session_state.shows)
@@ -672,7 +663,9 @@ with st.sidebar:
         show['mix_styles'] = st.checkbox("Mix styles", value=show['mix_styles'])
         show['separate_ages'] = st.checkbox("Separate age groups", value=show.get('separate_ages', True))
         if show['separate_ages']:
-            show['age_gap'] = st.number_input("Age group min gap", value=show.get('age_gap', 2), min_value=1, max_value=10, help="Min routines between same age groups")
+            show['age_gap'] = st.number_input("Age group min gap", value=show.get('age_gap', 2),
+                                               min_value=1, max_value=10,
+                                               help="Min routines between same age groups")
         st.info("Team routines are never placed back-to-back")
         if show['mix_styles']:
             st.info("Same dance style never placed back-to-back")
@@ -683,8 +676,11 @@ with st.sidebar:
                 st.warning("No routines to optimize. Upload and import a CSV first.")
             else:
                 show['optimized'] = optimize_show(
-                    show['routines'], show['min_gap'], show['mix_styles'],
-                    show.get('separate_ages', True), show.get('age_gap', 2),
+                    show['optimized'] if show['optimized'] else show['routines'],
+                    show['min_gap'],
+                    show['mix_styles'],
+                    show.get('separate_ages', True),
+                    show.get('age_gap', 2),
                     show.get('spread_teams', False)
                 )
                 save_to_sheets(spreadsheet, st.session_state.shows)
@@ -744,9 +740,12 @@ with tab1:
                             if sv == 'nan' or not sv:
                                 sv = 'General'
                             routines[name] = {
-                                'name': name, 'style': sv,
+                                'name': name,
+                                'style': sv,
                                 'age_group': extract_age_group(name),
-                                'dancers': [], 'locked': False, 'id': name
+                                'dancers': [],
+                                'locked': False,
+                                'id': name
                             }
                         dancer = str(row['dancer_name']).strip()
                         if dancer and dancer != 'nan' and dancer not in routines[name]['dancers']:
@@ -829,7 +828,10 @@ with tab2:
         num_routines = len(r_list)
         int_col1, int_col2 = st.columns([3, 1])
         with int_col1:
-            int_position = st.number_input("Insert after routine #", min_value=1, max_value=max(num_routines, 1), value=max(num_routines // 2, 1), key="intermission_pos")
+            int_position = st.number_input("Insert after routine #",
+                                           min_value=1, max_value=max(num_routines, 1),
+                                           value=max(num_routines // 2, 1),
+                                           key="intermission_pos")
         with int_col2:
             st.write("")
             st.write("")
@@ -858,8 +860,11 @@ with tab2:
                     st.warning("No routines to optimize.")
                 else:
                     show['optimized'] = optimize_show(
-                        show['routines'], show['min_gap'], show['mix_styles'],
-                        show.get('separate_ages', True), show.get('age_gap', 2),
+                        show['optimized'] if show['optimized'] else show['routines'],
+                        show['min_gap'],
+                        show['mix_styles'],
+                        show.get('separate_ages', True),
+                        show.get('age_gap', 2),
                         show.get('spread_teams', False),
                     )
                     st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
@@ -872,7 +877,8 @@ with tab3:
     st.subheader("Quick Change Conflicts")
     if show['routines']:
         r_list = show['optimized'] if show['optimized'] else show['routines']
-        conflicts = calculate_conflicts(r_list, show['warn_gap'], show['consider_gap'], show['min_gap'], show.get('mix_styles', False))
+        conflicts = calculate_conflicts(r_list, show['warn_gap'], show['consider_gap'],
+                                        show['min_gap'], show.get('mix_styles', False))
         st.write(f"**Min Gap Required:** {show['min_gap']} | **Warn at:** {show['warn_gap']} | **Consider up to:** {show['consider_gap']}")
         if conflicts.get('min_gap_violations'):
             st.error(f"MIN GAP VIOLATIONS: {len(conflicts['min_gap_violations'])} dancer(s) have gaps smaller than the required minimum of {show['min_gap']}")
@@ -924,7 +930,10 @@ with tab3:
                     continue
                 emoji = "\u26a0\ufe0f WARNING" if info['min_gap'] < show['warn_gap'] else "!"
                 st.write(f"{emoji} **{dancer}**: {info['min_gap']}-routine gap {info['positions'][0]+1}. {info['routines'][0]} to {info['positions'][1]+1}. {info['routines'][1]}")
-        if (not conflicts['dancer_conflicts'] and not age_warnings and not conflicts.get('team_backtoback') and not conflicts.get('min_gap_violations') and not conflicts.get('style_backtoback')):
+        if (not conflicts['dancer_conflicts'] and not age_warnings
+                and not conflicts.get('team_backtoback')
+                and not conflicts.get('min_gap_violations')
+                and not conflicts.get('style_backtoback')):
             st.success("No conflicts!")
 
 with tab4:
@@ -943,7 +952,9 @@ with tab4:
                 if dancer not in dancer_routines:
                     dancer_routines[dancer] = []
                 dancer_routines[dancer].append((i, r['name']))
-        report_type = st.selectbox("Select Report Type", ["Program Order", "Roster", "Check-In", "Check-Out", "Program Schedule", "Quick Change Schedule", "Performer Schedules"])
+        report_type = st.selectbox("Select Report Type",
+            ["Program Order", "Roster", "Check-In", "Check-Out",
+             "Program Schedule", "Quick Change Schedule", "Performer Schedules"])
         st.divider()
         if report_type == "Program Order":
             st.markdown("### Program Order")
@@ -958,12 +969,16 @@ with tab4:
             program_data = []
             for i, r in enumerate(r_list):
                 if r.get('is_intermission'):
-                    program_data.append({'Order': i+1, 'Routine Name': '--- INTERMISSION ---', 'Style': '', 'Age Group': '', 'Dancers': 0})
+                    program_data.append({'Order': i+1, 'Routine Name': '--- INTERMISSION ---',
+                                         'Style': '', 'Age Group': '', 'Dancers': 0})
                 else:
-                    program_data.append({'Order': i+1, 'Routine Name': r['name'], 'Style': r['style'], 'Age Group': r.get('age_group', 'Unknown'), 'Dancers': len(r.get('dancers', []))})
+                    program_data.append({'Order': i+1, 'Routine Name': r['name'],
+                                         'Style': r['style'], 'Age Group': r.get('age_group', 'Unknown'),
+                                         'Dancers': len(r.get('dancers', []))})
             df_program = pd.DataFrame(program_data)
             csv = df_program.to_csv(index=False)
-            st.download_button("Download CSV", csv, f"{show['name']}_program_order.csv", "text/csv")
+            st.download_button("Download CSV", csv,
+                               f"{show['name']}_program_order.csv", "text/csv")
         elif report_type == "Roster":
             st.markdown("### Roster")
             st.markdown("*Alphabetical list of all performers*")
@@ -972,7 +987,8 @@ with tab4:
                 st.write(dancer)
             df_roster = pd.DataFrame({'Performer Name': sorted_dancers})
             csv = df_roster.to_csv(index=False)
-            st.download_button("Download CSV", csv, f"{show['name']}_roster.csv", "text/csv")
+            st.download_button("Download CSV", csv,
+                               f"{show['name']}_roster.csv", "text/csv")
         elif report_type == "Check-In":
             st.markdown("### Check-In")
             st.markdown("*Performer list with their first routine*")
@@ -981,11 +997,14 @@ with tab4:
                 routines = dancer_routines.get(dancer, [])
                 if routines:
                     first_pos, first_routine = routines[0]
-                    checkin_data.append({'Performer': dancer, 'First Routine #': first_pos + 1, 'First Routine Name': first_routine})
+                    checkin_data.append({'Performer': dancer,
+                                         'First Routine #': first_pos + 1,
+                                         'First Routine Name': first_routine})
             df_checkin = pd.DataFrame(checkin_data)
             st.dataframe(df_checkin, use_container_width=True, hide_index=True)
             csv = df_checkin.to_csv(index=False)
-            st.download_button("Download CSV", csv, f"{show['name']}_checkin.csv", "text/csv")
+            st.download_button("Download CSV", csv,
+                               f"{show['name']}_checkin.csv", "text/csv")
         elif report_type == "Check-Out":
             st.markdown("### Check-Out")
             st.markdown("*Performer list with their last routine*")
@@ -994,11 +1013,14 @@ with tab4:
                 routines = dancer_routines.get(dancer, [])
                 if routines:
                     last_pos, last_routine = routines[-1]
-                    checkout_data.append({'Performer': dancer, 'Last Routine #': last_pos + 1, 'Last Routine Name': last_routine})
+                    checkout_data.append({'Performer': dancer,
+                                          'Last Routine #': last_pos + 1,
+                                          'Last Routine Name': last_routine})
             df_checkout = pd.DataFrame(checkout_data)
             st.dataframe(df_checkout, use_container_width=True, hide_index=True)
             csv = df_checkout.to_csv(index=False)
-            st.download_button("Download CSV", csv, f"{show['name']}_checkout.csv", "text/csv")
+            st.download_button("Download CSV", csv,
+                               f"{show['name']}_checkout.csv", "text/csv")
         elif report_type == "Program Schedule":
             st.markdown("### Program Schedule")
             st.markdown("*List of routines and their performers*")
@@ -1019,10 +1041,14 @@ with tab4:
                 if r.get('is_intermission'):
                     continue
                 for dancer in r.get('dancers', []):
-                    schedule_data.append({'Routine #': i+1, 'Routine Name': r['name'], 'Style': r['style'], 'Age Group': r.get('age_group', 'Unknown'), 'Performer': dancer})
+                    schedule_data.append({'Routine #': i+1, 'Routine Name': r['name'],
+                                          'Style': r['style'],
+                                          'Age Group': r.get('age_group', 'Unknown'),
+                                          'Performer': dancer})
             df_schedule = pd.DataFrame(schedule_data)
             csv = df_schedule.to_csv(index=False)
-            st.download_button("Download CSV", csv, f"{show['name']}_program_schedule.csv", "text/csv")
+            st.download_button("Download CSV", csv,
+                               f"{show['name']}_program_schedule.csv", "text/csv")
         elif report_type == "Quick Change Schedule":
             st.markdown("### Quick Change Schedule")
             st.markdown("*Program schedule detailing all costume changes*")
@@ -1050,7 +1076,10 @@ with tab4:
                         next_pos = routines[current_idx + 1][0]
                         next_name = routines[current_idx + 1][1]
                         going_to = f"{next_pos + 1}. {next_name}"
-                    change_data.append({'Performer': dancer, 'Coming From': coming_from, 'This Routine': r['name'], 'Going To': going_to})
+                    change_data.append({'Performer': dancer,
+                                         'Coming From': coming_from,
+                                         'This Routine': r['name'],
+                                         'Going To': going_to})
                 if change_data:
                     df_change = pd.DataFrame(change_data)
                     st.dataframe(df_change, use_container_width=True, hide_index=True)
@@ -1081,4 +1110,5 @@ with tab4:
                 })
             df_performer = pd.DataFrame(performer_data)
             csv = df_performer.to_csv(index=False)
-            st.download_button("Download CSV", csv, f"{show['name']}_performer_schedules.csv", "text/csv")
+            st.download_button("Download CSV", csv,
+                               f"{show['name']}_performer_schedules.csv", "text/csv")
