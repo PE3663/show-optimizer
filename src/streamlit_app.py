@@ -309,7 +309,7 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
     return score
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """v19: Balanced quadratic penalties, repair phase, tuned SA for fewer violations."""
+    """v22: Added repair phase for zero violations, repair phase, tuned SA for fewer violations."""
     if not routines:
         return routines
     segments = []
@@ -338,7 +338,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
     return result
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spread_teams):
-    """v19: Balanced quadratic penalties, repair phase, tuned SA for fewer violations."""
+    """v22: Added repair phase for zero violations, repair phase, tuned SA for fewer violations."""
     locked_positions = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -585,6 +585,51 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         if best_violations == 0 and best_cost == 0 and time.time() - start_time > 20:
             break
 
+    # Repair phase: fix remaining violations by targeted swaps
+    if best_order is not None and count_violations(best_order) > 0:
+        for repair_pass in range(100):
+            improved = False
+            viol_positions = set()
+            dancer_last_r = {}
+            for i, r in enumerate(best_order):
+                if r.get('is_intermission'):
+                    continue
+                for dn in r.get('dancers', []):
+                    if dn in dancer_last_r:
+                        if i - dancer_last_r[dn] < min_gap:
+                            viol_positions.add(i)
+                            viol_positions.add(dancer_last_r[dn])
+                    dancer_last_r[dn] = i
+                if is_team_routine(r) and i > 0:
+                    prev = best_order[i-1]
+                    if not prev.get('is_intermission') and is_team_routine(prev):
+                        viol_positions.add(i)
+                if mix_styles and i > 0:
+                    prev = best_order[i-1]
+                    if not prev.get('is_intermission'):
+                        if r.get('style') and prev.get('style') and r['style'] == prev['style']:
+                            viol_positions.add(i)
+            if not viol_positions:
+                break
+            viol_list = [p for p in viol_positions if not best_order[p].get('locked')]
+            ul_pos = [i for i, r in enumerate(best_order) if not r.get('locked') and not r.get('is_intermission')]
+            random.shuffle(viol_list)
+            old_v = count_violations(best_order)
+            for vp in viol_list:
+                if improved:
+                    break
+                for tp in ul_pos:
+                    if tp == vp:
+                        continue
+                    best_order[vp], best_order[tp] = best_order[tp], best_order[vp]
+                    new_v = count_violations(best_order)
+                    if new_v < old_v:
+                        improved = True
+                        break
+                    best_order[vp], best_order[tp] = best_order[tp], best_order[vp]
+            if not improved:
+                break
+            
             return best_order if best_order is not None else routines
 
 if spreadsheet:
