@@ -86,9 +86,9 @@ def load_from_sheets(spreadsheet):
 DANCE_DISCIPLINES = [
     'hip hop', 'musical theatre', 'music theatre', 'contemporary',
     'acro', 'acrobatic', 'jazz', 'ballet', 'tap', 'lyrical',
-    'modern', 'theatre', 'theater', 'pointe', 'funk',
-    'breakdance', 'ballroom', 'latin', 'salsa', 'pom', 'kick',
-    'tumbling', 'stunting', 'lifts', 'cheer', 'stretch',
+    'modern', 'theatre', 'theater', 'pointe', 'funk', 'breakdance',
+    'ballroom', 'latin', 'salsa', 'pom', 'kick', 'tumbling',
+    'stunting', 'lifts', 'cheer', 'stretch',
 ]
 
 def extract_discipline(class_name):
@@ -215,9 +215,13 @@ if 'current_show' not in st.session_state:
 
 def calculate_conflicts(routines, warn_gap, consider_gap, min_gap=None, mix_styles=False):
     conflicts = {
-        'danger': [], 'warning': [], 'dancer_conflicts': {},
-        'gap_histogram': {}, 'team_backtoback': [],
-        'min_gap_violations': [], 'style_backtoback': []
+        'danger': [],
+        'warning': [],
+        'dancer_conflicts': {},
+        'gap_histogram': {},
+        'team_backtoback': [],
+        'min_gap_violations': [],
+        'style_backtoback': []
     }
     dancer_appearances = {}
     for i, routine in enumerate(routines):
@@ -278,7 +282,6 @@ def calculate_conflicts(routines, warn_gap, consider_gap, min_gap=None, mix_styl
     return conflicts
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """Split by intermissions, optimize each segment, reassemble."""
     if not routines:
         return routines
     segments = []
@@ -307,9 +310,6 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
     return result
 
 def _score(order, min_gap, mix_styles):
-    """Fast scoring: returns (hard_violations, soft_cost).
-    hard_violations = dancer gap < min_gap + same style adjacent + team adjacent
-    soft_cost = sum of penalties for near-misses to maximize spacing."""
     hard = 0
     soft = 0.0
     dancer_last = {}
@@ -322,13 +322,10 @@ def _score(order, min_gap, mix_styles):
             continue
         style = r.get('style', '')
         rt_is_team = is_team_routine(r)
-        # Style adjacency
         if mix_styles and prev_style and style and style == prev_style:
             hard += 1
-        # Team adjacency
         if rt_is_team and prev_is_team:
             hard += 1
-        # Dancer gap
         for dn in r.get('dancers', []):
             if dn in dancer_last:
                 d = i - dancer_last[dn]
@@ -336,16 +333,45 @@ def _score(order, min_gap, mix_styles):
                     hard += 1
                     soft += (min_gap - d + 1) ** 3 * 1000
                 elif d == min_gap:
-                    soft += 100
+                    soft += 200
                 elif d < min_gap + 3:
-                    soft += (min_gap + 3 - d) * 10
+                    soft += (min_gap + 3 - d) * 20
             dancer_last[dn] = i
         prev_style = style
         prev_is_team = rt_is_team
     return hard, soft
 
+def _find_violating_positions(order, min_gap, mix_styles):
+    """Return set of positions involved in hard violations."""
+    bad = set()
+    dancer_last = {}
+    prev_style = None
+    prev_is_team = False
+    for i, r in enumerate(order):
+        if r.get('is_intermission'):
+            prev_style = None
+            prev_is_team = False
+            continue
+        style = r.get('style', '')
+        rt_is_team = is_team_routine(r)
+        if mix_styles and prev_style and style and style == prev_style:
+            bad.add(i)
+            bad.add(i - 1)
+        if rt_is_team and prev_is_team:
+            bad.add(i)
+            bad.add(i - 1)
+        for dn in r.get('dancers', []):
+            if dn in dancer_last:
+                d = i - dancer_last[dn]
+                if d < min_gap:
+                    bad.add(i)
+                    bad.add(dancer_last[dn])
+            dancer_last[dn] = i
+        prev_style = style
+        prev_is_team = rt_is_team
+    return bad
+
 def _optimize_segment(routines, min_gap, mix_styles):
-    """ShowSort-quality optimizer using constraint-aware greedy + SA."""
     locked_map = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -356,22 +382,13 @@ def _optimize_segment(routines, min_gap, mix_styles):
     if not unlocked:
         return routines
     n = len(routines)
-    # Pre-compute dancer sets for fast overlap checking
     dancer_sets = {}
     for r in routines:
         dancer_sets[r['id']] = set(r.get('dancers', []))
-    # Build shared-dancer conflict map between unlocked routines
-    conflict_pairs = {}
-    for a in range(len(unlocked)):
-        for b in range(a + 1, len(unlocked)):
-            shared = dancer_sets[unlocked[a]['id']] & dancer_sets[unlocked[b]['id']]
-            if shared:
-                conflict_pairs[(a, b)] = len(shared)
-                conflict_pairs[(b, a)] = len(shared)
     start_time = time.time()
-    time_limit = min(120, max(30, n * 2))
-    # Greedy construction: place most-constrained routines first
-    def greedy_build(candidates, locked_map, n, min_gap, mix_styles):
+    time_limit = min(180, max(45, n * 3))
+
+    def insertion_greedy(candidates, locked_map, n, min_gap, mix_styles):
         result = [None] * n
         for pos, r in locked_map.items():
             result[pos] = r
@@ -383,15 +400,12 @@ def _optimize_segment(routines, min_gap, mix_styles):
                     dancer_positions[dn] = []
                 dancer_positions[dn].append(pos)
         remaining = list(candidates)
-        for slot in open_slots:
-            if not remaining:
-                break
-            best_idx = 0
+        for routine in remaining:
+            best_slot = None
             best_pen = float('inf')
-            for idx, routine in enumerate(remaining):
+            for slot in open_slots:
                 pen = 0
-                dancers = routine.get('dancers', [])
-                for dn in dancers:
+                for dn in routine.get('dancers', []):
                     if dn in dancer_positions:
                         for pp in dancer_positions[dn]:
                             d = abs(slot - pp)
@@ -402,90 +416,168 @@ def _optimize_segment(routines, min_gap, mix_styles):
                             elif d < min_gap + 2:
                                 pen += 500
                 if mix_styles and routine.get('style'):
+                    s = routine['style']
                     if slot > 0 and result[slot - 1] is not None:
-                        if not result[slot - 1].get('is_intermission'):
-                            if result[slot - 1].get('style') == routine['style']:
-                                pen += 200000
+                        if not result[slot - 1].get('is_intermission') and result[slot - 1].get('style') == s:
+                            pen += 200000
                     if slot + 1 < n and result[slot + 1] is not None:
-                        if not result[slot + 1].get('is_intermission'):
-                            if result[slot + 1].get('style') == routine['style']:
-                                pen += 200000
+                        if not result[slot + 1].get('is_intermission') and result[slot + 1].get('style') == s:
+                            pen += 200000
                 if is_team_routine(routine):
-                    if slot > 0 and result[slot - 1] is not None:
-                        if is_team_routine(result[slot - 1]):
-                            pen += 200000
-                    if slot + 1 < n and result[slot + 1] is not None:
-                        if is_team_routine(result[slot + 1]):
-                            pen += 200000
+                    if slot > 0 and result[slot - 1] is not None and is_team_routine(result[slot - 1]):
+                        pen += 200000
+                    if slot + 1 < n and result[slot + 1] is not None and is_team_routine(result[slot + 1]):
+                        pen += 200000
                 if pen < best_pen:
                     best_pen = pen
-                    best_idx = idx
+                    best_slot = slot
                     if pen == 0:
                         break
-            chosen = remaining.pop(best_idx)
-            result[slot] = chosen
-            for dn in chosen.get('dancers', []):
-                if dn not in dancer_positions:
-                    dancer_positions[dn] = []
-                dancer_positions[dn].append(slot)
+            if best_slot is not None:
+                result[best_slot] = routine
+                open_slots.remove(best_slot)
+                for dn in routine.get('dancers', []):
+                    if dn not in dancer_positions:
+                        dancer_positions[dn] = []
+                    dancer_positions[dn].append(best_slot)
         for i in range(n):
-            if result[i] is None and remaining:
-                result[i] = remaining.pop(0)
+            if result[i] is None and open_slots:
+                pass
         return [r for r in result if r is not None]
-    # --- PHASE 1: Multi-restart greedy ---
+
+    # --- Build dancer conflict graph for smart ordering ---
+    dancer_to_routines = {}
+    for idx, r in enumerate(unlocked):
+        for dn in r.get('dancers', []):
+            if dn not in dancer_to_routines:
+                dancer_to_routines[dn] = []
+            dancer_to_routines[dn].append(idx)
+    conflict_weight = {}
+    for idx in range(len(unlocked)):
+        w = 0
+        for dn in unlocked[idx].get('dancers', []):
+            if len(dancer_to_routines.get(dn, [])) > 1:
+                w += len(dancer_to_routines[dn]) - 1
+        conflict_weight[idx] = w
+
+    # Sort by most constrained first
+    def most_constrained_order():
+        order = list(range(len(unlocked)))
+        order.sort(key=lambda i: conflict_weight[i], reverse=True)
+        return [unlocked[i] for i in order]
+
+    # Interleave team and non-team routines
+    def team_interleaved_order():
+        teams = [r for r in unlocked if is_team_routine(r)]
+        non_teams = [r for r in unlocked if not is_team_routine(r)]
+        random.shuffle(teams)
+        random.shuffle(non_teams)
+        result = []
+        ti, ni = 0, 0
+        use_team = False
+        while ti < len(teams) or ni < len(non_teams):
+            if use_team and ti < len(teams):
+                result.append(teams[ti])
+                ti += 1
+            elif ni < len(non_teams):
+                result.append(non_teams[ni])
+                ni += 1
+            elif ti < len(teams):
+                result.append(teams[ti])
+                ti += 1
+            # Place a team routine every 3-4 non-team routines
+            if not use_team:
+                use_team = (ni > 0 and ni % 3 == 0 and ti < len(teams))
+            else:
+                use_team = False
+        return result
+
+    # Style-interleaved order with conflict awareness
+    def style_spread_order():
+        style_groups = {}
+        for r in unlocked:
+            s = r.get('style', 'General')
+            if s not in style_groups:
+                style_groups[s] = []
+            style_groups[s].append(r)
+        for k in style_groups:
+            style_groups[k].sort(key=lambda r: conflict_weight[unlocked.index(r)], reverse=True)
+        cands = []
+        keys = sorted(style_groups.keys(), key=lambda k: len(style_groups[k]), reverse=True)
+        while any(style_groups[k] for k in keys):
+            for k in keys:
+                if style_groups[k]:
+                    cands.append(style_groups[k].pop(0))
+        return cands
+
+    # Graph coloring inspired: separate conflicting routines
+    def conflict_spread_order():
+        indexed = list(range(len(unlocked)))
+        indexed.sort(key=lambda i: conflict_weight[i], reverse=True)
+        placed = []
+        for idx in indexed:
+            best_pos = 0
+            best_cost = float('inf')
+            for pos in range(len(placed) + 1):
+                cost = 0
+                for dn in unlocked[idx].get('dancers', []):
+                    for j, pidx in enumerate(placed):
+                        if dn in dancer_sets[unlocked[pidx]['id']]:
+                            d = abs(pos - j)
+                            if d < min_gap:
+                                cost += (min_gap - d + 1) ** 2
+                if cost < best_cost:
+                    best_cost = cost
+                    best_pos = pos
+                    if cost == 0:
+                        break
+            placed.insert(best_pos, idx)
+        return [unlocked[i] for i in placed]
+
+    # --- PHASE 1: Multi-restart greedy with diverse strategies ---
     best_order = None
     best_hard = float('inf')
     best_soft = float('inf')
-    for restart in range(500):
-        if time.time() - start_time > time_limit * 0.3:
+
+    strategies = [
+        most_constrained_order,
+        team_interleaved_order,
+        style_spread_order,
+        conflict_spread_order,
+    ]
+
+    for restart in range(800):
+        if time.time() - start_time > time_limit * 0.25:
             break
-        if restart == 0:
-            cands = sorted(unlocked, key=lambda r: len(r.get('dancers', [])), reverse=True)
-        elif restart == 1:
-            style_groups = {}
-            for r in unlocked:
-                s = r.get('style', 'General')
-                if s not in style_groups:
-                    style_groups[s] = []
-                style_groups[s].append(r)
-            for k in style_groups:
-                random.shuffle(style_groups[k])
-            cands = []
-            keys = list(style_groups.keys())
-            random.shuffle(keys)
-            while any(style_groups[k] for k in keys):
-                for k in keys:
-                    if style_groups[k]:
-                        cands.append(style_groups[k].pop(0))
-        elif restart % 5 == 2:
-            style_groups = {}
-            for r in unlocked:
-                s = r.get('style', 'General')
-                if s not in style_groups:
-                    style_groups[s] = []
-                style_groups[s].append(r)
-            for k in style_groups:
-                style_groups[k].sort(key=lambda r: sum(1 for p in conflict_pairs if p[0] == unlocked.index(r) if unlocked.index(r) < len(unlocked)), reverse=True)
-            cands = []
-            keys = sorted(style_groups.keys(), key=lambda k: len(style_groups[k]), reverse=True)
-            while any(style_groups[k] for k in keys):
-                for k in keys:
-                    if style_groups[k]:
-                        cands.append(style_groups[k].pop(0))
+        if restart < len(strategies):
+            cands = strategies[restart]()
+        elif restart % 7 == 0:
+            cands = team_interleaved_order()
+        elif restart % 7 == 1:
+            cands = conflict_spread_order()
+        elif restart % 7 == 2:
+            cands = style_spread_order()
+        elif restart % 7 == 3:
+            cands = most_constrained_order()
+            mid = len(cands) // 2
+            cands = cands[mid:] + cands[:mid]
         else:
             cands = unlocked[:]
             random.shuffle(cands)
-        order = greedy_build(cands, locked_map, n, min_gap, mix_styles)
+
+        order = insertion_greedy(cands, locked_map, n, min_gap, mix_styles)
         h, s = _score(order, min_gap, mix_styles)
         if h < best_hard or (h == best_hard and s < best_soft):
             best_hard = h
             best_soft = s
             best_order = order[:]
-        if h == 0 and s == 0:
-            break
+            if h == 0 and s == 0:
+                break
+
     if best_order is None:
         best_order = list(routines)
-    # --- PHASE 2: Simulated Annealing (swap only - preserves locked) ---
+
+    # --- PHASE 2: Simulated Annealing with targeted violation moves ---
     ul_idx = [i for i, r in enumerate(best_order)
               if not r.get('locked') and not r.get('is_intermission')]
     if len(ul_idx) >= 2:
@@ -493,18 +585,47 @@ def _optimize_segment(routines, min_gap, mix_styles):
         cur_h, cur_s = best_hard, best_soft
         sa_best = cur[:]
         sa_h, sa_s = cur_h, cur_s
-        T = 10.0
-        cooling = 0.99995
-        steps = min(1500000, len(ul_idx) * 8000)
+        T = 15.0
+        cooling = 0.99997
+        steps = min(2000000, len(ul_idx) * 10000)
         no_improve = 0
+
         for step in range(steps):
-            if time.time() - start_time > time_limit * 0.9:
+            if time.time() - start_time > time_limit * 0.85:
                 break
             if sa_h == 0 and sa_s == 0:
                 break
+
             r_val = random.random()
-            if r_val < 0.55:
-                # Swap two random unlocked
+
+            if r_val < 0.40 and cur_h > 0:
+                # Targeted: swap a violating position with a random one
+                bad_pos = _find_violating_positions(cur, min_gap, mix_styles)
+                bad_ul = [i for i in ul_idx if i in bad_pos]
+                if bad_ul:
+                    p1 = random.choice(bad_ul)
+                    p2 = random.choice(ul_idx)
+                    while p2 == p1:
+                        p2 = random.choice(ul_idx)
+                else:
+                    i1, i2 = random.sample(range(len(ul_idx)), 2)
+                    p1, p2 = ul_idx[i1], ul_idx[i2]
+                cur[p1], cur[p2] = cur[p2], cur[p1]
+                nh, ns = _score(cur, min_gap, mix_styles)
+                accept = False
+                if nh < cur_h or (nh == cur_h and ns < cur_s):
+                    accept = True
+                elif T > 0.01:
+                    delta = (nh - cur_h) * 100000 + (ns - cur_s)
+                    if delta <= 0 or random.random() < math.exp(-delta / max(T, 0.001)):
+                        accept = True
+                if accept:
+                    cur_h, cur_s = nh, ns
+                else:
+                    cur[p1], cur[p2] = cur[p2], cur[p1]
+
+            elif r_val < 0.70:
+                # Random swap of two unlocked
                 i1, i2 = random.sample(range(len(ul_idx)), 2)
                 p1, p2 = ul_idx[i1], ul_idx[i2]
                 cur[p1], cur[p2] = cur[p2], cur[p1]
@@ -520,29 +641,30 @@ def _optimize_segment(routines, min_gap, mix_styles):
                     cur_h, cur_s = nh, ns
                 else:
                     cur[p1], cur[p2] = cur[p2], cur[p1]
-            elif r_val < 0.80:
-                # Rotate 3 adjacent unlocked positions
-                if len(ul_idx) >= 3:
-                    start_i = random.randint(0, len(ul_idx) - 3)
-                    p1, p2, p3 = ul_idx[start_i], ul_idx[start_i+1], ul_idx[start_i+2]
-                    saved = cur[p1], cur[p2], cur[p3]
-                    cur[p1], cur[p2], cur[p3] = cur[p3], cur[p1], cur[p2]
-                    nh, ns = _score(cur, min_gap, mix_styles)
-                    accept = False
-                    if nh < cur_h or (nh == cur_h and ns < cur_s):
+
+            elif r_val < 0.85 and len(ul_idx) >= 3:
+                # Rotate 3 positions
+                start_i = random.randint(0, len(ul_idx) - 3)
+                p1, p2, p3 = ul_idx[start_i], ul_idx[start_i+1], ul_idx[start_i+2]
+                saved = cur[p1], cur[p2], cur[p3]
+                cur[p1], cur[p2], cur[p3] = cur[p3], cur[p1], cur[p2]
+                nh, ns = _score(cur, min_gap, mix_styles)
+                accept = False
+                if nh < cur_h or (nh == cur_h and ns < cur_s):
+                    accept = True
+                elif T > 0.01:
+                    delta = (nh - cur_h) * 100000 + (ns - cur_s)
+                    if delta <= 0 or random.random() < math.exp(-delta / max(T, 0.001)):
                         accept = True
-                    elif T > 0.01:
-                        delta = (nh - cur_h) * 100000 + (ns - cur_s)
-                        if delta <= 0 or random.random() < math.exp(-delta / max(T, 0.001)):
-                            accept = True
-                    if accept:
-                        cur_h, cur_s = nh, ns
-                    else:
-                        cur[p1], cur[p2], cur[p3] = saved
+                if accept:
+                    cur_h, cur_s = nh, ns
+                else:
+                    cur[p1], cur[p2], cur[p3] = saved
+
             else:
-                # Reverse a small segment of unlocked
+                # Reverse a small segment
                 if len(ul_idx) >= 3:
-                    seg_len = random.randint(2, min(5, len(ul_idx)))
+                    seg_len = random.randint(2, min(6, len(ul_idx)))
                     si = random.randint(0, len(ul_idx) - seg_len)
                     positions = ul_idx[si:si + seg_len]
                     vals = [cur[p] for p in positions]
@@ -563,34 +685,44 @@ def _optimize_segment(routines, min_gap, mix_styles):
                         vals.reverse()
                         for k, pos in enumerate(positions):
                             cur[pos] = vals[k]
-            # Track SA best
+
             if cur_h < sa_h or (cur_h == sa_h and cur_s < sa_s):
                 sa_best = cur[:]
                 sa_h, sa_s = cur_h, cur_s
                 no_improve = 0
             else:
                 no_improve += 1
+
             T *= cooling
-            if no_improve > 80000:
-                T = max(T, 5.0)
+
+            # Reheat if stuck
+            if no_improve > 60000:
+                T = max(T, 8.0)
                 no_improve = 0
+
         best_order = sa_best
         best_hard, best_soft = sa_h, sa_s
-    # --- PHASE 3: Targeted repair for remaining hard violations ---
+
+    # --- PHASE 3: Aggressive targeted repair for remaining violations ---
     if best_hard > 0:
         ul_idx = [i for i, r in enumerate(best_order)
                   if not r.get('locked') and not r.get('is_intermission')]
-        for _ in range(3000):
+        for repair_round in range(5000):
             if time.time() - start_time > time_limit:
                 break
             h, s = _score(best_order, min_gap, mix_styles)
             if h == 0:
                 break
+            bad_pos = _find_violating_positions(best_order, min_gap, mix_styles)
+            bad_ul = [i for i in ul_idx if i in bad_pos]
+            if not bad_ul:
+                break
             improved = False
-            random.shuffle(ul_idx)
-            for i in ul_idx:
+            random.shuffle(bad_ul)
+            for i in bad_ul:
                 if improved:
                     break
+                random.shuffle(ul_idx)
                 for j in ul_idx:
                     if i == j:
                         continue
@@ -601,7 +733,27 @@ def _optimize_segment(routines, min_gap, mix_styles):
                         break
                     best_order[i], best_order[j] = best_order[j], best_order[i]
             if not improved:
+                # Try 3-way rotation on bad positions
+                if len(bad_ul) >= 2 and len(ul_idx) >= 3:
+                    bi = random.choice(bad_ul)
+                    others = [j for j in ul_idx if j != bi]
+                    random.shuffle(others)
+                    for j in others[:20]:
+                        for k in others[:20]:
+                            if k == j or k == bi:
+                                continue
+                            saved = best_order[bi], best_order[j], best_order[k]
+                            best_order[bi], best_order[j], best_order[k] = best_order[k], best_order[bi], best_order[j]
+                            nh, ns = _score(best_order, min_gap, mix_styles)
+                            if nh < h or (nh == h and ns < s):
+                                improved = True
+                                break
+                            best_order[bi], best_order[j], best_order[k] = saved
+                        if improved:
+                            break
+            if not improved:
                 break
+
     return best_order
 
 if spreadsheet:
@@ -621,11 +773,16 @@ with st.sidebar:
             if new_name:
                 show_id = f"show_{len(st.session_state.shows)}"
                 st.session_state.shows[show_id] = {
-                    'name': new_name, 'warn_gap': warn_gap,
-                    'consider_gap': consider_gap, 'min_gap': min_gap,
-                    'mix_styles': mix_styles, 'separate_ages': True,
-                    'age_gap': 2, 'spread_teams': False,
-                    'routines': [], 'optimized': []
+                    'name': new_name,
+                    'warn_gap': warn_gap,
+                    'consider_gap': consider_gap,
+                    'min_gap': min_gap,
+                    'mix_styles': mix_styles,
+                    'separate_ages': True,
+                    'age_gap': 2,
+                    'spread_teams': False,
+                    'routines': [],
+                    'optimized': []
                 }
                 st.session_state.current_show = show_id
                 save_to_sheets(spreadsheet, st.session_state.shows)
@@ -656,7 +813,8 @@ with st.sidebar:
             else:
                 show['optimized'] = optimize_show(
                     show['optimized'] if show['optimized'] else show['routines'],
-                    show['min_gap'], show['mix_styles'],
+                    show['min_gap'],
+                    show['mix_styles'],
                     show.get('separate_ages', True),
                     show.get('age_gap', 2),
                     show.get('spread_teams', False)
@@ -667,7 +825,7 @@ with st.sidebar:
                 st.rerun()
 
 if (not st.session_state.current_show or
-        st.session_state.current_show not in st.session_state.shows):
+    st.session_state.current_show not in st.session_state.shows):
     st.info("Create or select a show from the sidebar")
     st.stop()
 
@@ -718,9 +876,12 @@ with tab1:
                             if sv == 'nan' or not sv:
                                 sv = 'General'
                             routines[name] = {
-                                'name': name, 'style': sv,
+                                'name': name,
+                                'style': sv,
                                 'age_group': extract_age_group(name),
-                                'dancers': [], 'locked': False, 'id': name
+                                'dancers': [],
+                                'locked': False,
+                                'id': name
                             }
                         dancer = str(row['dancer_name']).strip()
                         if dancer and dancer != 'nan' and dancer not in routines[name]['dancers']:
@@ -803,7 +964,10 @@ with tab2:
         num_routines = len(r_list)
         int_col1, int_col2 = st.columns([3, 1])
         with int_col1:
-            int_position = st.number_input("Insert after routine #", min_value=1, max_value=max(num_routines, 1), value=max(num_routines // 2, 1), key="intermission_pos")
+            int_position = st.number_input("Insert after routine #", min_value=1,
+                                           max_value=max(num_routines, 1),
+                                           value=max(num_routines // 2, 1),
+                                           key="intermission_pos")
         with int_col2:
             st.write("")
             st.write("")
@@ -833,7 +997,8 @@ with tab2:
                 else:
                     show['optimized'] = optimize_show(
                         show['optimized'] if show['optimized'] else show['routines'],
-                        show['min_gap'], show['mix_styles'],
+                        show['min_gap'],
+                        show['mix_styles'],
                         show.get('separate_ages', True),
                         show.get('age_gap', 2),
                         show.get('spread_teams', False))
@@ -847,7 +1012,8 @@ with tab3:
     st.subheader("Quick Change Conflicts")
     if show['routines']:
         r_list = show['optimized'] if show['optimized'] else show['routines']
-        conflicts = calculate_conflicts(r_list, show['warn_gap'], show['consider_gap'], show['min_gap'], show.get('mix_styles', False))
+        conflicts = calculate_conflicts(r_list, show['warn_gap'], show['consider_gap'],
+                                        show['min_gap'], show.get('mix_styles', False))
         st.write(f"**Min Gap Required:** {show['min_gap']} | **Warn at:** {show['warn_gap']} | **Consider up to:** {show['consider_gap']}")
         if conflicts.get('min_gap_violations'):
             st.error(f"MIN GAP VIOLATIONS: {len(conflicts['min_gap_violations'])} dancer(s) have gaps smaller than {show['min_gap']}")
@@ -900,9 +1066,9 @@ with tab3:
                 emoji = "\u26a0\ufe0f WARNING" if info['min_gap'] < show['warn_gap'] else "!"
                 st.write(f"{emoji} **{dancer}**: {info['min_gap']}-routine gap {info['positions'][0]+1}. {info['routines'][0]} to {info['positions'][1]+1}. {info['routines'][1]}")
         if (not conflicts['dancer_conflicts'] and not age_warnings
-                and not conflicts.get('team_backtoback')
-                and not conflicts.get('min_gap_violations')
-                and not conflicts.get('style_backtoback')):
+            and not conflicts.get('team_backtoback')
+            and not conflicts.get('min_gap_violations')
+            and not conflicts.get('style_backtoback')):
             st.success("No conflicts!")
 
 with tab4:
