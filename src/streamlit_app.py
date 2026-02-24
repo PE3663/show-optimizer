@@ -309,7 +309,7 @@ def score_order(order, min_gap, mix_styles, separate_ages, age_gap, spread_teams
     return score
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
-    """v18: Aggressive penalties, longer SA runs, slower cooling for better optimization."""
+    """v19: Balanced quadratic penalties, repair phase, tuned SA for fewer violations."""
     if not routines:
         return routines
     segments = []
@@ -338,7 +338,7 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
     return result
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spread_teams):
-    """v18: Aggressive penalties, longer SA runs, slower cooling for better optimization."""
+    """v19: Balanced quadratic penalties, repair phase, tuned SA for fewer violations."""
     locked_positions = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -383,12 +383,12 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                 if dn in dancer_last:
                     d = i - dancer_last[dn]
                     if d < min_gap:
-                        cost += (min_gap - d + 1) ** 3 * 500000
+                        cost += (min_gap - d) ** 2 * 200000
                 dancer_last[dn] = i
             if is_team_routine(r) and i > 0:
                 prev = order[i-1]
                 if not prev.get('is_intermission') and is_team_routine(prev):
-                    cost += 2000000
+                    cost += 500000
             if mix_styles and i > 0:
                 prev = order[i-1]
                 if not prev.get('is_intermission'):
@@ -438,16 +438,16 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
                         for pp in dancer_positions[dn]:
                             d = abs(slot - pp)
                             if d < min_gap:
-                                cost += (min_gap - d) ** 3 * 500000
+                                cost += (min_gap - d) ** 2 * 200000
                 if is_team_routine(routine):
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission') and is_team_routine(result[slot-1]):
-                            cost += 2000000
+                            cost += 500000
                 if mix_styles and routine.get('style'):
                     if slot > 0 and result[slot-1] is not None:
                         if not result[slot-1].get('is_intermission'):
                             if result[slot-1].get('style') == routine['style']:
-                                cost += 100000
+                                cost += 50000
                 if cost < best_cost:
                     best_cost = cost
                     best_idx = idx
@@ -469,7 +469,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
     best_cost = float('inf')
 
     # Multi-start: try different initial orderings
-    for restart in range(1000):
+    for restart in range(200):
         if time.time() - start_time >= time_limit:
             break
         # Create initial ordering
@@ -506,10 +506,10 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         # Simulated annealing
         current_cost = weighted_cost(order)
         current_v = count_violations(order)
-        T = max(current_cost * 0.8, 2000000.0)
-        cooling = 0.9998
+        T = max(current_cost * 0.3, 500000.0)
+        cooling = 0.9995
         min_T = 0.1
-        sa_steps = min(500000, len(ul_indices) * 3000)
+        sa_steps = min(300000, len(ul_indices) * 2000)
 
         for step in range(sa_steps):
             if time.time() - start_time >= time_limit:
@@ -585,7 +585,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages, age_gap, spr
         if best_violations == 0 and best_cost == 0 and time.time() - start_time > 20:
             break
 
-    return best_order if best_order else routines
+            return best_order if best_order else routines
 
 if spreadsheet:
     st.sidebar.success("Google Sheets backup: Connected")
