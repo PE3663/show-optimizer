@@ -61,12 +61,12 @@ def save_to_sheets(spreadsheet, shows, force=False):
                 )
             st.session_state['_cached_ws'] = ws
             data_str = json.dumps(shows)
-                CHUNK = 49000
-                chunks = [data_str[i:i+CHUNK] for i in range(0, len(data_str), CHUNK)]
-                cells = [[c] for c in chunks]
-                ws.clear()
-                ws.update('A1', cells)
-                st.session_state['_last_save_time'] = time.time()
+            CHUNK = 49000
+            chunks = [data_str[i:i+CHUNK] for i in range(0, len(data_str), CHUNK)]
+            cells = [[c] for c in chunks]
+            ws.clear()
+            ws.update('A1', cells)
+            st.session_state['_last_save_time'] = time.time()
             return
         except Exception as e:
             st.session_state.pop('_cached_ws', None)
@@ -338,10 +338,15 @@ def _score(order, min_gap, mix_styles, separate_ages=False, age_gap=2):
         style = r.get('style', '')
         rt_is_team = is_team_routine(r)
         age = r.get('age_group', 'Unknown')
+        # Style back-to-back: heavy hard penalty (5 per occurrence)
         if mix_styles and prev_style and style and style == prev_style:
-            hard += 1
+            hard += 5
+            soft += 500000
+        # Team back-to-back: heavy hard penalty (5 per occurrence)
         if rt_is_team and prev_is_team:
-            hard += 1
+            hard += 5
+            soft += 500000
+        # Dancer min gap violations
         for dn in r.get('dancers', []):
             if dn in dancer_last:
                 d = i - dancer_last[dn]
@@ -353,6 +358,7 @@ def _score(order, min_gap, mix_styles, separate_ages=False, age_gap=2):
                 elif d < min_gap + 3:
                     soft += (min_gap + 3 - d) * 20
             dancer_last[dn] = i
+        # Age group proximity: soft penalty (optimizer tries but dancer gaps take priority)
         if separate_ages and age and age != 'Unknown':
             if age in age_positions:
                 for prev_pos in age_positions[age]:
@@ -372,19 +378,29 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     dancer_last = {}
     prev_style = None
     prev_is_team = False
+    prev_age = None
+    prev_idx = None
     for i, r in enumerate(order):
         if r.get('is_intermission'):
             prev_style = None
             prev_is_team = False
+            prev_age = None
+            prev_idx = None
             continue
         style = r.get('style', '')
         rt_is_team = is_team_routine(r)
+        age = r.get('age_group', 'Unknown')
+        # Style back-to-back violation
         if mix_styles and prev_style and style and style == prev_style:
             bad.add(i)
-            bad.add(i - 1)
+            if prev_idx is not None:
+                bad.add(prev_idx)
+        # Team back-to-back violation
         if rt_is_team and prev_is_team:
             bad.add(i)
-            bad.add(i - 1)
+            if prev_idx is not None:
+                bad.add(prev_idx)
+        # Dancer gap violation
         for dn in r.get('dancers', []):
             if dn in dancer_last:
                 d = i - dancer_last[dn]
@@ -392,8 +408,17 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
                     bad.add(i)
                     bad.add(dancer_last[dn])
             dancer_last[dn] = i
+        # Age group proximity violation
+        if separate_ages and age and age != 'Unknown':
+            for j in range(max(0, i - age_gap + 1), i):
+                if j < len(order) and not order[j].get('is_intermission'):
+                    if order[j].get('age_group') == age:
+                        bad.add(i)
+                        bad.add(j)
         prev_style = style
         prev_is_team = rt_is_team
+        prev_age = age
+        prev_idx = i
     return bad
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2):
