@@ -61,8 +61,12 @@ def save_to_sheets(spreadsheet, shows, force=False):
                 )
             st.session_state['_cached_ws'] = ws
             data_str = json.dumps(shows)
-            ws.update_cell(1, 1, data_str)
-            st.session_state['_last_save_time'] = time.time()
+                CHUNK = 49000
+                chunks = [data_str[i:i+CHUNK] for i in range(0, len(data_str), CHUNK)]
+                cells = [[c] for c in chunks]
+                ws.clear()
+                ws.update('A1', cells)
+                st.session_state['_last_save_time'] = time.time()
             return
         except Exception as e:
             st.session_state.pop('_cached_ws', None)
@@ -80,8 +84,9 @@ def load_from_sheets(spreadsheet):
             st.session_state['_cached_ws'] = ws
         except gspread.WorksheetNotFound:
             return None
-        val = ws.cell(1, 1).value
-        if val:
+        all_vals = ws.col_values(1)
+        if all_vals:
+            val = ''.join(all_vals)
             return json.loads(val)
     except Exception:
         pass
