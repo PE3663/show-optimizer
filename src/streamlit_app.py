@@ -974,12 +974,27 @@ with tab2:
                 age_label = r.get('age_group', '')
                 age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
                 with st.expander(f"{chr(10060) if i in conflict_positions else chr(9989)} {i+1}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers"):
+                    new_name = st.text_input("Routine Name", value=r['name'], key=f"rename_{r['id']}")
+                    rcol1, rcol2 = st.columns([1, 1])
+                    with rcol1:
+                        if st.button("Rename", key=f"do_rename_{r['id']}"):
+                            if new_name and new_name != r['name']:
+                                old_name = r['name']
+                                for lst in [show['routines'], show['optimized']]:
+                                    for rt in lst:
+                                        if rt.get('id') == r['id']:
+                                            rt['name'] = new_name
+                                            rt['style'] = extract_discipline(new_name)
+                                            rt['age_group'] = extract_age_group(new_name)
+                                save_to_sheets(spreadsheet, st.session_state.shows)
+                                st.rerun()
+                    with rcol2:
+                        btn_label = "Lock" if not r.get('locked') else "Unlock"
+                        if st.button(btn_label, key=f"so_lock_{r['id']}"):
+                            r['locked'] = not r.get('locked', False)
+                            save_to_sheets(spreadsheet, st.session_state.shows)
+                            st.rerun()
                     st.write(", ".join(r['dancers']))
-                    btn_label = "Lock" if not r.get('locked') else "Unlock"
-                    if st.button(btn_label, key=f"so_lock_{r['id']}"):
-                        r['locked'] = not r.get('locked', False)
-                        save_to_sheets(spreadsheet, st.session_state.shows)
-                        st.rerun()
         st.divider()
         st.markdown("**Add Intermission**")
         num_routines = len(r_list)
