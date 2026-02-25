@@ -43,12 +43,12 @@ def get_gsheet_client():
         st.sidebar.warning(f"Sheets not connected: {e}")
         return None, None
 
-def save_to_sheets(spreadsheet, shows):
+def save_to_sheets(spreadsheet, shows, force=False):
     if not spreadsheet:
         return
     now = time.time()
     last = st.session_state.get('_last_save_time', 0)
-    if now - last < 5:
+    if not force and now - last < 5:
         return
     try:
         ws = st.session_state.get('_cached_ws')
@@ -812,10 +812,15 @@ with st.sidebar:
                     show.get('age_gap', 2),
                     show.get('spread_teams', False)
                 )
-                save_to_sheets(spreadsheet, st.session_state.shows)
+                save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                 st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
                 st.success("Optimized!")
                 st.rerun()
+
+        st.divider()
+        if st.button("Force Save", use_container_width=True):
+            save_to_sheets(spreadsheet, st.session_state.shows, force=True)
+            st.success("Saved!")
 
 if (not st.session_state.current_show or
     st.session_state.current_show not in st.session_state.shows):
@@ -956,7 +961,7 @@ with tab2:
                 show['optimized'] = new_order
             else:
                 show['routines'] = new_order
-            save_to_sheets(spreadsheet, st.session_state.shows)
+            save_to_sheets(spreadsheet, st.session_state.shows, force=True)
             st.rerun()
         st.markdown("**Click a routine below to see its dancers:**")
         for i, r in enumerate(r_list):
@@ -1020,7 +1025,7 @@ with tab2:
                 show['routines'] = show['optimized'].copy()
                 for i, r in enumerate(show['routines']):
                     r['order'] = i + 1
-                save_to_sheets(spreadsheet, st.session_state.shows)
+                save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                 st.success("Saved!")
                 st.rerun()
         with bcol2:
@@ -1037,7 +1042,7 @@ with tab2:
                         show.get('spread_teams', False))
                     st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
                     if spreadsheet:
-                        save_to_sheets(spreadsheet, st.session_state.shows)
+                        save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                     st.success("Show optimized successfully!")
                     st.rerun()
 
