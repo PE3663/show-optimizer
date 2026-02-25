@@ -475,9 +475,9 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                             pen += 200000
                 if is_team_routine(routine):
                     if slot > 0 and result[slot - 1] is not None and is_team_routine(result[slot - 1]):
-                        pen += 200000
+                        pen += 500000
                     if slot + 1 < n and result[slot + 1] is not None and is_team_routine(result[slot + 1]):
-                        pen += 200000
+                        pen += 500000
                 if separate_ages and routine.get('age_group') and routine['age_group'] != 'Unknown':
                     ag = routine['age_group']
                     for check in range(max(0, slot - age_gap + 1), min(n, slot + age_gap)):
