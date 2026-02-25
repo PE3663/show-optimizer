@@ -50,9 +50,9 @@ def save_to_sheets(spreadsheet, shows, force=False):
     last = st.session_state.get('_last_save_time', 0)
     if not force and now - last < 5:
         return
-    try:
-        ws = st.session_state.get('_cached_ws')
-        if ws is None:
+    for attempt in range(3):
+        try:
+            st.session_state.pop('_cached_ws', None)
             try:
                 ws = spreadsheet.worksheet("ShowData")
             except gspread.WorksheetNotFound:
@@ -60,12 +60,16 @@ def save_to_sheets(spreadsheet, shows, force=False):
                     title="ShowData", rows=1000, cols=1
                 )
             st.session_state['_cached_ws'] = ws
-        data_str = json.dumps(shows)
-        ws.update_cell(1, 1, data_str)
-        st.session_state['_last_save_time'] = time.time()
-    except Exception as e:
-        st.session_state.pop('_cached_ws', None)
-        st.toast(f"Backup save error: {e}")
+            data_str = json.dumps(shows)
+            ws.update_cell(1, 1, data_str)
+            st.session_state['_last_save_time'] = time.time()
+            return
+        except Exception as e:
+            st.session_state.pop('_cached_ws', None)
+            if attempt == 2:
+                st.sidebar.error(f"Backup save failed: {e}")
+            else:
+                time.sleep(1)
 
 def load_from_sheets(spreadsheet):
     if not spreadsheet:
@@ -778,7 +782,7 @@ with st.sidebar:
                     'optimized': []
                 }
                 st.session_state.current_show = show_id
-                save_to_sheets(spreadsheet, st.session_state.shows)
+                save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                 st.success(f"Created: {new_name}")
                 st.rerun()
     if st.session_state.shows:
@@ -914,7 +918,7 @@ with tab1:
                         show['optimized'] = []
                     for i, r in enumerate(show['routines']):
                         r['order'] = i + 1
-                    save_to_sheets(spreadsheet, st.session_state.shows)
+                    save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                     st.success(f"\u2705 Import Complete! {len(show['routines'])} routines imported successfully.")
                     st.balloons()
                     st.rerun()
@@ -973,7 +977,7 @@ with tab2:
                     if st.button("Remove", key=f"rm_int_{r['id']}"):
                         target = show['optimized'] if show['optimized'] else show['routines']
                         target[:] = [x for x in target if x.get('id') != r['id']]
-                        save_to_sheets(spreadsheet, st.session_state.shows)
+                        save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                         st.rerun()
             else:
                 age_label = r.get('age_group', '')
@@ -991,13 +995,13 @@ with tab2:
                                             rt['name'] = new_name
                                             rt['style'] = extract_discipline(new_name)
                                             rt['age_group'] = extract_age_group(new_name)
-                                save_to_sheets(spreadsheet, st.session_state.shows)
+                                save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                                 st.rerun()
                     with rcol2:
                         btn_label = "Lock" if not r.get('locked') else "Unlock"
                         if st.button(btn_label, key=f"so_lock_{r['id']}"):
                             r['locked'] = not r.get('locked', False)
-                            save_to_sheets(spreadsheet, st.session_state.shows)
+                            save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                             st.rerun()
                     st.write(", ".join(r['dancers']))
         st.divider()
@@ -1016,7 +1020,7 @@ with tab2:
                 target.insert(insert_idx, intermission)
                 for i, r in enumerate(target):
                     r['order'] = i + 1
-                save_to_sheets(spreadsheet, st.session_state.shows)
+                save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                 st.rerun()
         st.divider()
         bcol1, bcol2 = st.columns(2)
