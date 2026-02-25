@@ -937,14 +937,14 @@ with tab2:
     if not r_list:
         st.info("No routines yet. Upload a CSV first.")
     else:
-        routine_labels = []
+        conflict_positions = _find_violating_positions(r_list, show['min_gap'], show.get('mix_styles', False), show.get('separate_ages', True), show.get('age_gap', 2)); routine_labels = []
         for i, r in enumerate(r_list):
             if r.get('is_intermission'):
                 routine_labels.append(f"{i+1}. --- INTERMISSION ---")
             else:
                 age_label = r.get('age_group', '')
                 age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
-                routine_labels.append(f"{i+1}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers")
+                routine_labels.append(f"{chr(10060) if i in conflict_positions else chr(9989)} {i+1}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers")
         st.markdown("**Drag and drop to reorder routines:**")
         sorted_labels = sort_items(routine_labels, direction='vertical')
         if sorted_labels != routine_labels:
@@ -973,7 +973,7 @@ with tab2:
             else:
                 age_label = r.get('age_group', '')
                 age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
-                with st.expander(f"{i+1}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers"):
+                with st.expander(f"{chr(10060) if i in conflict_positions else chr(9989)} {i+1}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers"):
                     st.write(", ".join(r['dancers']))
                     btn_label = "Lock" if not r.get('locked') else "Unlock"
                     if st.button(btn_label, key=f"so_lock_{r['id']}"):
