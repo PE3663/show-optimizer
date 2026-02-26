@@ -372,12 +372,10 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
 
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2):
-    """Fast optimizer using simulated annealing with smart initialization.
+    """Fast reliable optimizer: smart greedy init + simulated annealing.
     
-    Strategy:
-    1. Build initial order using constraint-aware greedy (place most constrained first)
-    2. Simulated annealing with targeted swaps (swap violating positions)
-    3. Multiple restarts if needed
+    Uses backbone pre-placement for tight constraints, then SA for everything.
+    The key is getting a good initial solution so SA can finish quickly.
     """
     locked_map = {}
     unlocked = []
@@ -390,16 +388,18 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         return routines
 
     n = len(routines)
+    rid_to_r = {r['id']: r for r in routines}
 
     def is_team(r):
         return 'team' in r.get('name', '').lower() and not r.get('is_intermission')
 
-    # Pre-compute dancer lists per routine id
     routine_dancers = {}
+    routine_dancer_set = {}
     for r in routines:
-        routine_dancers[r['id']] = r.get('dancers', [])
+        ds = r.get('dancers', [])
+        routine_dancers[r['id']] = ds
+        routine_dancer_set[r['id']] = set(ds)
 
-    # Dancer -> list of routine ids (only unlocked+locked non-intermission)
     dancer_to_rids = {}
     for r in routines:
         if r.get('is_intermission'):
@@ -410,8 +410,20 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     locked_ids = set(r['id'] for r in locked_map.values())
     locked_positions = set(locked_map.keys())
     unlocked_positions = sorted(set(range(n)) - locked_positions)
+    ul_set = set(unlocked_positions)
 
-    # ── Fast violation counter ───────────────────────────────────────
+    # Pre-compute: for each pair of routine ids, do they share dancers?
+    # (Only needed for routines in unlocked set)
+    unlocked_ids = [r['id'] for r in unlocked]
+    pair_shares = {}
+    for i in range(len(unlocked_ids)):
+        for j in range(i + 1, len(unlocked_ids)):
+            r1, r2 = unlocked_ids[i], unlocked_ids[j]
+            if routine_dancer_set[r1] & routine_dancer_set[r2]:
+                pair_shares[(r1, r2)] = True
+                pair_shares[(r2, r1)] = True
+
+    # -- Violation counter --
     def count_violations(order):
         v = 0
         dl = {}
@@ -419,16 +431,13 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             r = order[i]
             if r is None or r.get('is_intermission'):
                 continue
-            # Style back-to-back
             if mix_styles:
                 s = r.get('style', '')
                 if s and i > 0 and order[i-1] is not None:
                     if not order[i-1].get('is_intermission') and order[i-1].get('style') == s:
                         v += 1
-            # Team back-to-back
             if is_team(r) and i > 0 and order[i-1] is not None and is_team(order[i-1]):
                 v += 1
-            # Dancer gaps
             for dn in routine_dancers[r['id']]:
                 if dn in dl:
                     if i - dl[dn] < min_gap:
@@ -436,7 +445,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 dl[dn] = i
         return v
 
-    # ── Find violating positions ─────────────────────────────────────
     def find_violating(order):
         bad = set()
         dl = {}
@@ -447,71 +455,92 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             s = r.get('style', '')
             if mix_styles and s and i > 0 and order[i-1] is not None:
                 if not order[i-1].get('is_intermission') and order[i-1].get('style') == s:
-                    bad.add(i)
-                    bad.add(i-1)
+                    bad.add(i); bad.add(i-1)
             if is_team(r) and i > 0 and order[i-1] is not None and is_team(order[i-1]):
-                bad.add(i)
-                bad.add(i-1)
+                bad.add(i); bad.add(i-1)
             for dn in routine_dancers[r['id']]:
                 if dn in dl and i - dl[dn] < min_gap:
-                    bad.add(i)
-                    bad.add(dl[dn])
+                    bad.add(i); bad.add(dl[dn])
                 dl[dn] = i
         return bad
 
-    # ── Delta evaluation (fast: only recount affected area) ──────────
-    def delta_swap(order, p1, p2):
-        """Compute violation change from swapping positions p1 and p2.
-        Instead of rescoring entire order, just swap and rescore."""
-        # For simplicity and correctness, do full recount
-        # The order is only 26 items max, so this is fast enough
-        order[p1], order[p2] = order[p2], order[p1]
-        new_v = count_violations(order)
-        order[p1], order[p2] = order[p2], order[p1]
-        return new_v
+    # -- Enumerate valid position sequences --
+    def enum_sequences(k, n_slots, gap, avail_set):
+        results = []
+        avail = sorted(avail_set)
+        def bt(idx, last, seq):
+            if len(results) > 200:
+                return
+            if idx == k:
+                results.append(tuple(seq))
+                return
+            start_val = last + gap if last >= 0 else 0
+            remaining = k - idx - 1
+            for pos in avail:
+                if pos < start_val:
+                    continue
+                if remaining > 0 and pos + remaining * gap >= n_slots:
+                    break
+                seq.append(pos)
+                bt(idx + 1, pos, seq)
+                seq.pop()
+        bt(0, -1, [])
+        return results
 
-    # ── Greedy initial placement ─────────────────────────────────────
-    def build_initial(seed):
+    # -- Greedy fill with bidirectional gap awareness --
+    def greedy_fill(pinned, seed):
         random.seed(seed)
         order = [None] * n
         for pos, r in locked_map.items():
             order[pos] = r
-        
-        remaining = unlocked[:]
+        for rid, pos in pinned.items():
+            order[pos] = rid_to_r[rid]
+
+        # Build dancer->positions map from all placed routines
+        dancer_positions = {}
+        for i in range(n):
+            if order[i] is not None:
+                for dn in routine_dancers.get(order[i]['id'], []):
+                    dancer_positions.setdefault(dn, []).append(i)
+
+        pinned_ids = set(pinned.keys()) | locked_ids
+        remaining = [r for r in unlocked if r['id'] not in pinned_ids]
         random.shuffle(remaining)
-        
-        # Sort by constraint tightness (most constrained first)
+
         def tightness(r):
             max_count = 0
             for dn in routine_dancers[r['id']]:
                 c = len(dancer_to_rids.get(dn, []))
                 if c > max_count:
                     max_count = c
-            return -max_count
+            return (-max_count, random.random())
         remaining.sort(key=tightness)
-        
-        dl = {}
-        open_slots = list(unlocked_positions)
-        
+
+        open_slots = sorted([i for i in range(n) if order[i] is None])
+
         for routine in remaining:
             rid = routine['id']
             dancers = routine_dancers[rid]
             best_slot = None
             best_pen = float('inf')
-            
+
             for slot in open_slots:
                 if order[slot] is not None:
                     continue
                 pen = 0
-                
-                # Dancer gap penalty
+
+                # Dancer gap: check ALL existing positions for each dancer (bidirectional)
                 for dn in dancers:
-                    last = dl.get(dn)
-                    if last is not None:
-                        g = abs(slot - last)
+                    positions = dancer_positions.get(dn, [])
+                    for prev_pos in positions:
+                        g = abs(slot - prev_pos)
                         if g < min_gap:
                             pen += (min_gap - g) * 100
-                
+                            break  # One violation per dancer is enough to penalize
+
+                if pen >= best_pen:
+                    continue
+
                 # Style back-to-back
                 if mix_styles:
                     style = routine.get('style', '')
@@ -522,62 +551,56 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                         if slot < n-1 and order[slot+1] is not None:
                             if not order[slot+1].get('is_intermission') and order[slot+1].get('style') == style:
                                 pen += 500
-                
+
+                if pen >= best_pen:
+                    continue
+
                 # Team back-to-back
                 if is_team(routine):
                     if slot > 0 and order[slot-1] is not None and is_team(order[slot-1]):
                         pen += 500
                     if slot < n-1 and order[slot+1] is not None and is_team(order[slot+1]):
                         pen += 500
-                
-                # Prefer larger gaps (tiebreak)
+
+                if pen >= best_pen:
+                    continue
+
+                # Tiebreak: maximize minimum gap to any dancer's other placement
                 if pen == 0:
                     min_g = 9999
                     for dn in dancers:
-                        last = dl.get(dn)
-                        if last is not None:
-                            g = abs(slot - last)
+                        positions = dancer_positions.get(dn, [])
+                        for prev_pos in positions:
+                            g = abs(slot - prev_pos)
                             if g < min_g:
                                 min_g = g
-                    pen = -min_g  # negative = prefer larger gaps
-                
+                    pen = -min_g
+
                 if pen < best_pen:
                     best_pen = pen
                     best_slot = slot
-            
+
             if best_slot is not None:
                 order[best_slot] = routine
                 for dn in dancers:
-                    dl[dn] = best_slot
-                # Remove from open_slots
+                    dancer_positions.setdefault(dn, []).append(best_slot)
                 open_slots = [s for s in open_slots if s != best_slot]
-        
+
         return order
 
-    # ── Simulated annealing ──────────────────────────────────────────
+    # -- Simulated annealing --
     def anneal(order, time_budget):
         cur_v = count_violations(order)
         best_v = cur_v
         best_order = order[:]
-        
         if cur_v == 0:
             return best_order, 0
-        
         ul = unlocked_positions[:]
         n_ul = len(ul)
-        
         start_t = time.time()
-        iteration = 0
-        temp = 2.0
-        
         while time.time() - start_t < time_budget:
-            iteration += 1
-            
-            # Cooling schedule
             elapsed = time.time() - start_t
             temp = max(0.01, 2.0 * (1.0 - elapsed / time_budget))
-            
-            # 70% targeted swaps (swap a violating position), 30% random
             if random.random() < 0.7:
                 bad = find_violating(order)
                 bad_ul = [p for p in ul if p in bad]
@@ -586,63 +609,98 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 p1 = random.choice(bad_ul)
             else:
                 p1 = ul[random.randint(0, n_ul - 1)]
-            
             p2 = ul[random.randint(0, n_ul - 1)]
             if p1 == p2:
                 continue
-            
-            new_v = delta_swap(order, p1, p2)
+            order[p1], order[p2] = order[p2], order[p1]
+            new_v = count_violations(order)
             delta = new_v - cur_v
-            
             if delta <= 0 or (temp > 0.05 and random.random() < (0.3 ** (delta / temp))):
-                order[p1], order[p2] = order[p2], order[p1]
                 cur_v = new_v
-                
                 if cur_v < best_v:
                     best_v = cur_v
                     best_order = order[:]
                     if best_v == 0:
                         return best_order, 0
-        
+            else:
+                order[p1], order[p2] = order[p2], order[p1]
         return best_order, best_v
 
-    # ── Main: multiple restarts ──────────────────────────────────────
-    overall_best_order = None
-    overall_best_v = float('inf')
+    # -- Find backbone --
+    rid_tuple_to_dancers = {}
+    for dn, rids in dancer_to_rids.items():
+        unlocked_rids = tuple(sorted([rid for rid in rids if rid not in locked_ids]))
+        if len(unlocked_rids) <= 1:
+            continue
+        rid_tuple_to_dancers.setdefault(unlocked_rids, []).append(dn)
+
+    tight_groups = []
+    for rids_tuple, dancers in rid_tuple_to_dancers.items():
+        k = len(rids_tuple)
+        needed = 1 + (k - 1) * min_gap
+        slack = n - needed
+        tight_groups.append((slack, k, list(rids_tuple), dancers))
+    tight_groups.sort()
+
+    backbone_rids = []
+    backbone_seqs = []
+    if tight_groups and tight_groups[0][0] <= 5:
+        slack, k, rids, dancers = tight_groups[0]
+        backbone_rids = rids
+        backbone_seqs = enum_sequences(k, n, min_gap, set(unlocked_positions))
+
+    # -- MAIN LOOP: greedy restart + SA --
+    best_order = None
+    best_v = float('inf')
     start = time.time()
-    total_time = 20  # seconds total budget (generous for slow CPUs)
-    restart = 0
-    
-    while time.time() - start < total_time and overall_best_v > 0:
-        restart += 1
+    total_time = 20
+
+    while time.time() - start < total_time and best_v > 0:
         remaining_time = total_time - (time.time() - start)
         if remaining_time < 0.3:
             break
-        
-        # Build a new initial order with different random seed
-        order = build_initial(seed=int(time.time() * 1000000) + restart * 7919)
-        
-        init_v = count_violations(order)
-        
-        # Give more time to promising starts, less to bad ones
-        if init_v <= 2:
-            time_per_restart = min(remaining_time, 5.0)
-        elif init_v <= 5:
-            time_per_restart = min(remaining_time, 3.0)
-        else:
-            time_per_restart = min(remaining_time, 2.0)
-        
-        result, v = anneal(order, time_per_restart)
-        
-        if v < overall_best_v:
-            overall_best_v = v
-            overall_best_order = result[:]
-    
-    if overall_best_order is None:
-        overall_best_order = list(routines)
-    
-    return overall_best_order
 
+        # Build pinned backbone
+        pinned = {}
+        if backbone_rids and backbone_seqs:
+            seq = random.choice(backbone_seqs)
+            perm = list(range(len(backbone_rids)))
+            random.shuffle(perm)
+            pinned = {backbone_rids[perm[i]]: seq[i] for i in range(len(backbone_rids))}
+
+        # Greedy fill
+        seed = int(time.time() * 1000000) + random.randint(0, 999999)
+        order = greedy_fill(pinned, seed)
+        v = count_violations(order)
+
+        if v == 0:
+            return order
+
+        if v < best_v:
+            best_v = v
+            best_order = order[:]
+
+        # SA repair - adaptive time budget
+        remaining_time = total_time - (time.time() - start)
+        if v <= 2:
+            sa_time = min(remaining_time * 0.6, 5.0)
+        elif v <= 5:
+            sa_time = min(remaining_time * 0.4, 3.0)
+        else:
+            sa_time = min(remaining_time * 0.3, 2.0)
+
+        if sa_time > 0.3:
+            result, rv = anneal(order[:], sa_time)
+            if rv == 0:
+                return result
+            if rv < best_v:
+                best_v = rv
+                best_order = result
+
+    if best_order is None:
+        best_order = list(routines)
+
+    return best_order
 
 
 if spreadsheet:
