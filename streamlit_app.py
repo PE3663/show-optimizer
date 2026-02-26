@@ -411,7 +411,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     locked_positions = set(locked_map.keys())
     unlocked_positions = sorted(set(range(n)) - locked_positions)
 
-    # -- Fast violation counter -------------------------------------------
+    # ── Fast violation counter ───────────────────────────────────────
     def count_violations(order):
         v = 0
         dl = {}
@@ -436,7 +436,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 dl[dn] = i
         return v
 
-    # -- Find violating positions -----------------------------------------
+    # ── Find violating positions ─────────────────────────────────────
     def find_violating(order):
         bad = set()
         dl = {}
@@ -459,7 +459,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 dl[dn] = i
         return bad
 
-    # -- Delta evaluation (fast: only recount affected area) -------------
+    # ── Delta evaluation (fast: only recount affected area) ──────────
     def delta_swap(order, p1, p2):
         """Compute violation change from swapping positions p1 and p2.
         Instead of rescoring entire order, just swap and rescore."""
@@ -470,7 +470,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         order[p1], order[p2] = order[p2], order[p1]
         return new_v
 
-    # -- Greedy initial placement ----------------------------------------
+    # ── Greedy initial placement ─────────────────────────────────────
     def build_initial(seed):
         random.seed(seed)
         order = [None] * n
@@ -554,7 +554,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         
         return order
 
-    # -- Simulated annealing ---------------------------------------------
+    # ── Simulated annealing ──────────────────────────────────────────
     def anneal(order, time_budget):
         cur_v = count_violations(order)
         best_v = cur_v
@@ -606,11 +606,11 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         
         return best_order, best_v
 
-    # -- Main: multiple restarts -----------------------------------------
+    # ── Main: multiple restarts ──────────────────────────────────────
     overall_best_order = None
     overall_best_v = float('inf')
     start = time.time()
-    total_time = 12  # seconds total budget
+    total_time = 20  # seconds total budget (generous for slow CPUs)
     restart = 0
     
     while time.time() - start < total_time and overall_best_v > 0:
@@ -626,11 +626,11 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         
         # Give more time to promising starts, less to bad ones
         if init_v <= 2:
-            time_per_restart = min(remaining_time, 4.0)
+            time_per_restart = min(remaining_time, 5.0)
         elif init_v <= 5:
-            time_per_restart = min(remaining_time, 2.5)
+            time_per_restart = min(remaining_time, 3.0)
         else:
-            time_per_restart = min(remaining_time, 1.5)
+            time_per_restart = min(remaining_time, 2.0)
         
         result, v = anneal(order, time_per_restart)
         
