@@ -952,7 +952,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             best_hard = h
             best_soft = s
             best_order = order[:]
-            if h == 0:
+            if h == 0 and s == 0:
                 break
 
     if best_order is None:
