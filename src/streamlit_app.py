@@ -457,13 +457,13 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 max_slack = slack
 
     if max_slack <= 3:
-        time_limit = min(600, max(300, n * 8))
+        time_limit = min(120, max(60, n * 2))
     elif max_slack <= 7:
-        time_limit = min(450, max(200, n * 6))
+        time_limit = min(90, max(45, n))
     elif max_slack <= 15:
-        time_limit = min(300, max(120, n * 4))
+        time_limit = min(60, max(30, n))
     else:
-        time_limit = min(180, max(45, n * 3))
+        time_limit = min(45, max(20, n))
 
     def _sa_accept(delta, T):
         if delta <= 0:
@@ -952,7 +952,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             best_hard = h
             best_soft = s
             best_order = order[:]
-            if h == 0 and s == 0:
+            if h == 0:
                 break
 
     if best_order is None:
@@ -968,7 +968,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     # Identify backbone positions in the current order
     backbone_positions_set = set(backbone_map.values()) if backbone_map else set()
     
-    if len(ul_idx) >= 2:
+    if len(ul_idx) >= 2 and best_hard > 0:
         sa_global_best = best_order[:]
         sa_global_h, sa_global_s = best_hard, best_soft
         sa_time_budget = time_limit * 0.75
@@ -989,7 +989,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             sa_best = cur[:]
             sa_h, sa_s = cur_h, cur_s
             T = 20.0 if sa_run == 1 else 12.0
-            cooling = 0.99997
+            cooling = 0.9999
             no_improve = 0
             run_time = min(sa_time_budget / max(1, 4 - sa_run), sa_time_budget - (time.time() - sa_start))
             run_start = time.time()
@@ -1080,7 +1080,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 else:
                     no_improve += 1
                 T *= cooling
-                if no_improve > 50000:
+                if no_improve > 15000:
                     T = max(T, 10.0)
                     no_improve = 0
             if sa_h < sa_global_h or (sa_h == sa_global_h and sa_s < sa_global_s):
