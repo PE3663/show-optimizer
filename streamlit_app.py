@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(
     page_title="Pure Energy Show Sort",
-    page_icon="\U0001F483",
+    page_icon="💃",
     layout="wide"
 )
 
@@ -109,7 +109,7 @@ def extract_discipline(class_name):
 
 def extract_age_group(routine_name):
     name = str(routine_name).strip()
-    m = re.search(r'(\d+\s*[-\u2013]\s*\d+)\s*[Yy]', name)
+    m = re.search(r'(\d+\s*[-–]\s*\d+)\s*[Yy]', name)
     if m:
         return m.group(1).replace(' ', '') + 'Yrs'
     m = re.search(r'(\d+\+)\s*[Yy]', name)
@@ -295,7 +295,8 @@ def calculate_conflicts(routines, warn_gap, consider_gap, min_gap=None, mix_styl
 
 def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, spread_teams=False):
     if not routines:
-        return routines
+        return routines, ["No routines to optimize"]
+    diag = [f"Optimizer {OPTIMIZER_VERSION}"]
     segments = []
     current_seg = []
     intermission_positions = []
@@ -307,19 +308,22 @@ def optimize_show(routines, min_gap, mix_styles, separate_ages=True, age_gap=2, 
         else:
             current_seg.append(r)
     segments.append(current_seg)
+    diag.append(f"{len(segments)} segment(s), intermissions: {len(intermission_positions)}")
     optimized_segments = []
-    for seg in segments:
+    for si, seg in enumerate(segments):
         if not seg:
             optimized_segments.append([])
             continue
-        optimized_seg = _optimize_segment(seg, min_gap, mix_styles, separate_ages, age_gap)
+        seg_diag = []
+        optimized_seg = _optimize_segment(seg, min_gap, mix_styles, separate_ages, age_gap, _diag=seg_diag)
+        diag.append(f"Seg {si+1} ({len(seg)} routines): " + "; ".join(seg_diag))
         optimized_segments.append(optimized_seg if optimized_seg else seg)
     result = []
     for i, seg in enumerate(optimized_segments):
         result.extend(seg)
         if i < len(intermission_positions):
             result.append(intermission_positions[i])
-    return result
+    return result, diag
 
 
 def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, age_gap=2):
@@ -331,6 +335,7 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     prev_idx = None
     for i, r in enumerate(order):
         if r.get('is_intermission'):
+            dancer_last = {}
             prev_style = None
             prev_is_team = False
             prev_age = None
@@ -371,12 +376,17 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     return bad
 
 
-def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2):
+OPTIMIZER_VERSION = "v5-diag-20260226"
+
+def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2, _diag=None):
     """Fast reliable optimizer: smart greedy init + simulated annealing.
     
     Uses backbone pre-placement for tight constraints, then SA for everything.
     The key is getting a good initial solution so SA can finish quickly.
     """
+    def _log(msg):
+        if _diag is not None:
+            _diag.append(msg)
     locked_map = {}
     unlocked = []
     for i, r in enumerate(routines):
@@ -385,9 +395,11 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         else:
             unlocked.append(r)
     if not unlocked:
+        _log(f"All {len(routines)} routines locked, returning as-is")
         return routines
 
     n = len(routines)
+    _log(f"Segment: {n} routines, {len(unlocked)} unlocked, min_gap={min_gap}")
     rid_to_r = {r['id']: r for r in routines}
 
     def is_team(r):
@@ -423,7 +435,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 pair_shares[(r1, r2)] = True
                 pair_shares[(r2, r1)] = True
 
-    # -- Violation counter --
+    # ── Violation counter ────────────────────────────────────
     def count_violations(order):
         v = 0
         dl = {}
@@ -464,7 +476,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 dl[dn] = i
         return bad
 
-    # -- Enumerate valid position sequences --
+    # ── Enumerate valid position sequences ─────────────────────
     def enum_sequences(k, n_slots, gap, avail_set):
         results = []
         avail = sorted(avail_set)
@@ -487,7 +499,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         bt(0, -1, [])
         return results
 
-    # -- Greedy fill with bidirectional gap awareness --
+    # ── Greedy fill with bidirectional gap awareness ─────────────────
     def greedy_fill(pinned, seed):
         random.seed(seed)
         order = [None] * n
@@ -588,7 +600,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
 
         return order
 
-    # -- Simulated annealing --
+    # ── Simulated annealing ────────────────────────────────────
     def anneal(order, time_budget):
         cur_v = count_violations(order)
         best_v = cur_v
@@ -626,7 +638,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 order[p1], order[p2] = order[p2], order[p1]
         return best_order, best_v
 
-    # -- Find backbone --
+    # ── Find backbone ────────────────────────────────────────────
     rid_tuple_to_dancers = {}
     for dn, rids in dancer_to_rids.items():
         unlocked_rids = tuple(sorted([rid for rid in rids if rid not in locked_ids]))
@@ -649,16 +661,21 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         backbone_rids = rids
         backbone_seqs = enum_sequences(k, n, min_gap, set(unlocked_positions))
 
-    # -- MAIN LOOP: greedy restart + SA --
+    # ── MAIN LOOP: greedy restart + SA ─────────────────────────────────
     best_order = None
     best_v = float('inf')
     start = time.time()
     total_time = 20
+    iteration = 0
+
+    _log(f"Backbone: {len(backbone_rids)} rids, {len(backbone_seqs)} sequences")
+    _log(f"Starting main loop with {total_time}s budget")
 
     while time.time() - start < total_time and best_v > 0:
         remaining_time = total_time - (time.time() - start)
         if remaining_time < 0.3:
             break
+        iteration += 1
 
         # Build pinned backbone
         pinned = {}
@@ -673,14 +690,18 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         order = greedy_fill(pinned, seed)
         v = count_violations(order)
 
+        if iteration <= 3:
+            _log(f"Iter {iteration}: greedy_v={v}, elapsed={time.time()-start:.1f}s")
+
         if v == 0:
+            _log(f"PERFECT at iter {iteration} after {time.time()-start:.1f}s (greedy alone)")
             return order
 
         if v < best_v:
             best_v = v
             best_order = order[:]
 
-        # SA repair - adaptive time budget
+        # SA repair — adaptive time budget
         remaining_time = total_time - (time.time() - start)
         if v <= 2:
             sa_time = min(remaining_time * 0.6, 5.0)
@@ -692,12 +713,17 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         if sa_time > 0.3:
             result, rv = anneal(order[:], sa_time)
             if rv == 0:
+                _log(f"PERFECT at iter {iteration} after {time.time()-start:.1f}s (SA repair)")
                 return result
             if rv < best_v:
                 best_v = rv
                 best_order = result
 
+    elapsed = time.time() - start
+    _log(f"Time expired: {iteration} iters in {elapsed:.1f}s, best_v={best_v}")
+
     if best_order is None:
+        _log("WARNING: best_order is None, returning input unchanged!")
         best_order = list(routines)
 
     return best_order
@@ -758,18 +784,33 @@ with st.sidebar:
             if not show['routines']:
                 st.warning("No routines to optimize. Upload and import a CSV first.")
             else:
-                show['optimized'] = optimize_show(
-                                    show['optimized'] if show['optimized'] else show['routines'],
+                input_order = show['optimized'] if show['optimized'] else show['routines']
+                st.session_state['_opt_input_hash'] = hash(tuple(r.get('id','') for r in input_order if not r.get('is_intermission')))
+                result, diag = optimize_show(
+                                    input_order,
                     show['min_gap'],
                     show['mix_styles'],
                     show.get('separate_ages', True),
                     show.get('age_gap', 2),
                     show.get('spread_teams', False)
                 )
+                st.session_state['_opt_output_hash'] = hash(tuple(r.get('id','') for r in result if not r.get('is_intermission')))
+                show['optimized'] = result
+                st.session_state['_last_diag'] = diag
+                # Verify the result is different from input
+                inp_ids = [r.get('id','') for r in input_order if not r.get('is_intermission')]
+                out_ids = [r.get('id','') for r in result if not r.get('is_intermission')]
+                if inp_ids == out_ids:
+                    diag.append("WARNING: Output order is IDENTICAL to input!")
+                else:
+                    diag.append(f"Order changed: {sum(1 for a,b in zip(inp_ids, out_ids) if a!=b)}/{len(inp_ids)} positions differ")
                 save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                 st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
-                st.success("Optimized!")
                 st.rerun()
+        if st.session_state.get('_last_diag'):
+            with st.expander("Last optimizer run", expanded=True):
+                for d in st.session_state['_last_diag']:
+                    st.text(d)
 
         st.divider()
         if st.button("Force Save", use_container_width=True):
@@ -789,12 +830,12 @@ with tab1:
     st.subheader("Upload Class Roster (CSV)")
     st.markdown(
         "**Supported formats:**\n"
-        "- **Jackrabbit Enrollment CSV** \u2014 columns: "
+        "- **Jackrabbit Enrollment CSV** — columns: "
         "`Class Name`, `Student First Name`, `Student Last Name`\n"
         "  - *Discipline is auto-detected from the Class Name*\n"
-        "- **Jackrabbit Recital Export** \u2014 columns: `Routine`, `Performer Name`\n"
-        "- **Grid-style CSV** \u2014 columns: `Class Name`, `Student Name`\n"
-        "- **App format** \u2014 columns: `routine_name`, `style`, `dancer_name`"
+        "- **Jackrabbit Recital Export** — columns: `Routine`, `Performer Name`\n"
+        "- **Grid-style CSV** — columns: `Class Name`, `Student Name`\n"
+        "- **App format** — columns: `routine_name`, `style`, `dancer_name`"
     )
     uploaded = st.file_uploader("Choose CSV", type="csv")
     if uploaded:
@@ -987,17 +1028,19 @@ with tab2:
                 if not show['routines']:
                     st.warning("No routines to optimize.")
                 else:
-                    show['optimized'] = optimize_show(
-                                            show['optimized'] if show['optimized'] else show['routines'],
+                    input_order = show['optimized'] if show['optimized'] else show['routines']
+                    result, diag = optimize_show(
+                                            input_order,
                         show['min_gap'],
                         show['mix_styles'],
                         show.get('separate_ages', True),
                         show.get('age_gap', 2),
                         show.get('spread_teams', False))
+                    show['optimized'] = result
+                    st.session_state['_last_diag'] = diag
                     st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
                     if spreadsheet:
                         save_to_sheets(spreadsheet, st.session_state.shows, force=True)
-                    st.success("Show optimized successfully!")
                     st.rerun()
 
 with tab3:
