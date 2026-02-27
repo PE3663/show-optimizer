@@ -480,7 +480,7 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     return bad
 
 
-OPTIMIZER_VERSION = "v5-namespread-20260226"
+OPTIMIZER_VERSION = "v5-namespread-45s-20260226"
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2, spread_names=True, _diag=None):
     """Fast reliable optimizer: smart greedy init + simulated annealing.
@@ -560,7 +560,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 pair_shares[(r1, r2)] = True
                 pair_shares[(r2, r1)] = True
 
-    # ── Violation counter ────────────────────────────────────────────
+    # ── Violation counter ────────────────────────────────────
     def count_violations(order):
         v = 0
         dl = {}
@@ -616,7 +616,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 bn_last[bn] = i
         return bad
 
-    # ── Enumerate valid position sequences ───────────────────────────
+    # ── Enumerate valid position sequences ───────────────────────
     def enum_sequences(k, n_slots, gap, avail_set):
         results = []
         avail = sorted(avail_set)
@@ -761,7 +761,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
 
         return order
 
-    # ── Simulated annealing ──────────────────────────────────────────
+    # ── Simulated annealing ────────────────────────────────────
     def anneal(order, time_budget):
         cur_v = count_violations(order)
         best_v = cur_v
@@ -799,7 +799,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 order[p1], order[p2] = order[p2], order[p1]
         return best_order, best_v
 
-    # ── Find backbone ────────────────────────────────────────────────
+    # ── Find backbone ──────────────────────────────────────────
     rid_tuple_to_dancers = {}
     for dn, rids in dancer_to_rids.items():
         unlocked_rids = tuple(sorted([rid for rid in rids if rid not in locked_ids]))
@@ -826,7 +826,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     best_order = None
     best_v = float('inf')
     start = time.time()
-    total_time = 20
+    total_time = 45
     iteration = 0
 
     _log(f"Backbone: {len(backbone_rids)} rids, {len(backbone_seqs)} sequences")
@@ -865,11 +865,11 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         # SA repair — adaptive time budget
         remaining_time = total_time - (time.time() - start)
         if v <= 2:
-            sa_time = min(remaining_time * 0.6, 5.0)
+            sa_time = min(remaining_time * 0.7, 10.0)
         elif v <= 5:
-            sa_time = min(remaining_time * 0.4, 3.0)
+            sa_time = min(remaining_time * 0.5, 8.0)
         else:
-            sa_time = min(remaining_time * 0.3, 2.0)
+            sa_time = min(remaining_time * 0.4, 5.0)
 
         if sa_time > 0.3:
             result, rv = anneal(order[:], sa_time)
