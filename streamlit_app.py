@@ -857,7 +857,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             # Temp range: 20 -> 0.1 — allows accepting ~style-level worsening
             # early on, but never hard-constraint worsening
             temp = max(0.1, 20.0 * (1.0 - progress))
-            if random.random() < 0.75:
+            if random.random() < 0.8:
                 bad = find_violating(order)
                 bad_ul = [p for p in ul if p in bad]
                 if not bad_ul:
@@ -910,7 +910,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     best_v = float('inf')
     start = time.time()
     max_iterations = 100  # Plenty of restarts for hard constraint problems
-    max_time = 12.0       # Safety: never exceed 12s per segment
+    max_time = 25.0       # Safety: never exceed 25s per segment
     iteration = 0
 
     _log(f"Backbone: {len(backbone_rids)} rids, {len(backbone_seqs)} sequences")
@@ -944,14 +944,13 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             best_order = order[:]
 
         # SA repair — iteration count based on weighted violation score
-        # Scores are now weighted: 500 per team b2b, 100 per dancer gap unit,
-        # 10 per style, 1 per age
+        # Higher iteration counts for harder problems
         if v <= 20:        # Only minor violations (style/age)
-            sa_iters = 10000
+            sa_iters = 15000
         elif v <= 200:     # Some dancer gap issues
-            sa_iters = 8000
-        else:              # Hard constraint violations
-            sa_iters = 6000
+            sa_iters = 20000
+        else:              # Hard constraint violations need most work
+            sa_iters = 25000
 
         result, rv = anneal(order[:], sa_iters)
         if rv == 0:
