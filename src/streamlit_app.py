@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(
     page_title="Pure Energy Show Sort",
-    page_icon="\U0001F483",
+    page_icon="💃",
     layout="wide"
 )
 
@@ -109,7 +109,7 @@ def extract_discipline(class_name):
 
 def extract_age_group(routine_name):
     name = str(routine_name).strip()
-    m = re.search(r'(\d+\s*[-\u2013]\s*\d+)\s*[Yy]', name)
+    m = re.search(r'(\d+\s*[-–]\s*\d+)\s*[Yy]', name)
     if m:
         return m.group(1).replace(' ', '') + 'Yrs'
     m = re.search(r'(\d+\+)\s*[Yy]', name)
@@ -150,7 +150,7 @@ def get_base_name(routine_name):
     name = routine_name.strip()
     name = re.sub(r'\([^)]*\)', '', name)
     name = re.sub(r'\[[^\]]*\]', '', name)
-    name = re.sub(r'\d+\s*[-\u2013]\s*\d+\s*[Yy][Rr][Ss]?\.?', '', name)
+    name = re.sub(r'\d+\s*[-–]\s*\d+\s*[Yy][Rr][Ss]?\.?', '', name)
     name = re.sub(r'\d+\+\s*[Yy][Rr][Ss]?\.?', '', name)
     name = re.sub(r'\b\d{1,2}\b', '', name)
     name = re.sub(r'\b20\d{2}\b', '', name)
@@ -159,7 +159,8 @@ def get_base_name(routine_name):
 
 def balance_halves(routines):
     """Redistribute routines across halves so that groups of similar routines
-    (same base name or same style) are spread evenly."""
+    (same base name or same style) are spread evenly, and team routines with
+    shared dancers are distributed to keep each half solvable."""
     intermission = None
     non_intermission = []
     for r in routines:
@@ -168,7 +169,7 @@ def balance_halves(routines):
         else:
             non_intermission.append(r)
     if not intermission:
-        return routines, ["No intermission found \u2014 add one first"]
+        return routines, ["No intermission found — add one first"]
     n = len(non_intermission)
     half_size = n // 2
     base_groups = {}
@@ -210,26 +211,50 @@ def balance_halves(routines):
     for r in half2:
         s = r.get('style', 'General')
         h2_styles[s] = h2_styles.get(s, 0) + 1
-    remaining.sort(key=lambda r: (-style_counts.get(r.get('style', 'General'), 0), r.get('style', '')))
+    # Build dancer sets per half for overlap-aware distribution
+    h1_dancers = set()
+    h2_dancers = set()
+    for r in half1:
+        h1_dancers.update(r.get('dancers', []))
+    for r in half2:
+        h2_dancers.update(r.get('dancers', []))
+    # Sort remaining: team routines first (they have most dancer overlap impact),
+    # then by style frequency
+    remaining.sort(key=lambda r: (
+        0 if is_team_routine(r) else 1,
+        -len(r.get('dancers', [])),
+        -style_counts.get(r.get('style', 'General'), 0),
+        r.get('style', '')
+    ))
     for r in remaining:
         s = r.get('style', 'General')
         h1c = h1_styles.get(s, 0)
         h2c = h2_styles.get(s, 0)
         h1_full = len(half1) >= half_size
         h2_full = len(half2) >= (n - half_size)
+        dancers = set(r.get('dancers', []))
+        # Count how many of this routine's dancers already appear in each half
+        h1_overlap = len(dancers & h1_dancers)
+        h2_overlap = len(dancers & h2_dancers)
         if h1_full:
-            half2.append(r); h2_styles[s] = h2c + 1
+            half2.append(r); h2_styles[s] = h2c + 1; h2_dancers.update(dancers)
         elif h2_full:
-            half1.append(r); h1_styles[s] = h1c + 1
-        elif h1c < h2c:
-            half1.append(r); h1_styles[s] = h1c + 1
-        elif h2c < h1c:
-            half2.append(r); h2_styles[s] = h2c + 1
-        elif len(half1) <= len(half2):
-            half1.append(r); h1_styles[s] = h1c + 1
+            half1.append(r); h1_styles[s] = h1c + 1; h1_dancers.update(dancers)
         else:
-            half2.append(r); h2_styles[s] = h2c + 1
+            # Prefer the half with less dancer overlap (reduces constraint density)
+            # Use style balance as tiebreaker
+            h1_score = h1_overlap * 3 + h1c
+            h2_score = h2_overlap * 3 + h2c
+            if h1_score < h2_score:
+                half1.append(r); h1_styles[s] = h1c + 1; h1_dancers.update(dancers)
+            elif h2_score < h1_score:
+                half2.append(r); h2_styles[s] = h2c + 1; h2_dancers.update(dancers)
+            elif len(half1) <= len(half2):
+                half1.append(r); h1_styles[s] = h1c + 1; h1_dancers.update(dancers)
+            else:
+                half2.append(r); h2_styles[s] = h2c + 1; h2_dancers.update(dancers)
     diag.append(f"Result: H1={len(half1)}, H2={len(half2)}")
+    diag.append(f"Dancer overlap: H1={len(h1_dancers)}, H2={len(h2_dancers)}")
     all_styles = sorted(set(list(h1_styles.keys()) + list(h2_styles.keys())))
     for s in all_styles:
         diag.append(f"  {s}: H1={h1_styles.get(s,0)}, H2={h2_styles.get(s,0)}")
@@ -480,7 +505,7 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     return bad
 
 
-OPTIMIZER_VERSION = "v5-namespread-45s-20260226"
+OPTIMIZER_VERSION = "v6-balanced-20260226"
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2, spread_names=True, _diag=None):
     """Fast reliable optimizer: smart greedy init + simulated annealing.
@@ -560,7 +585,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 pair_shares[(r1, r2)] = True
                 pair_shares[(r2, r1)] = True
 
-    # ── Violation counter ────────────────────────────────────
+    # ── Violation counter ───────────────────────────────────────────────────
     def count_violations(order):
         v = 0
         dl = {}
@@ -616,7 +641,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 bn_last[bn] = i
         return bad
 
-    # ── Enumerate valid position sequences ───────────────────────
+    # ── Enumerate valid position sequences ────────────────────────────────────────
     def enum_sequences(k, n_slots, gap, avail_set):
         results = []
         avail = sorted(avail_set)
@@ -639,7 +664,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         bt(0, -1, [])
         return results
 
-    # ── Greedy fill with bidirectional gap awareness ─────────────────
+    # ── Greedy fill with bidirectional gap awareness ───────────────────────────────
     def greedy_fill(pinned, seed):
         random.seed(seed)
         order = [None] * n
@@ -761,7 +786,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
 
         return order
 
-    # ── Simulated annealing ────────────────────────────────────
+    # ── Simulated annealing ─────────────────────────────────────────────────────────────
     def anneal(order, time_budget):
         cur_v = count_violations(order)
         best_v = cur_v
@@ -799,7 +824,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 order[p1], order[p2] = order[p2], order[p1]
         return best_order, best_v
 
-    # ── Find backbone ──────────────────────────────────────────
+    # ── Find backbone ─────────────────────────────────────────────────────────────────
     rid_tuple_to_dancers = {}
     for dn, rids in dancer_to_rids.items():
         unlocked_rids = tuple(sorted([rid for rid in rids if rid not in locked_ids]))
@@ -822,7 +847,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         backbone_rids = rids
         backbone_seqs = enum_sequences(k, n, min_gap, set(unlocked_positions))
 
-    # ── MAIN LOOP: greedy restart + SA ───────────────────────────────
+    # ── MAIN LOOP: greedy restart + SA ─────────────────────────────────────────────
     best_order = None
     best_v = float('inf')
     start = time.time()
@@ -1018,12 +1043,12 @@ with tab1:
     st.subheader("Upload Class Roster (CSV)")
     st.markdown(
         "**Supported formats:**\n"
-        "- **Jackrabbit Enrollment CSV** \u2014 columns: "
+        "- **Jackrabbit Enrollment CSV** — columns: "
         "`Class Name`, `Student First Name`, `Student Last Name`\n"
         "  - *Discipline is auto-detected from the Class Name*\n"
-        "- **Jackrabbit Recital Export** \u2014 columns: `Routine`, `Performer Name`\n"
-        "- **Grid-style CSV** \u2014 columns: `Class Name`, `Student Name`\n"
-        "- **App format** \u2014 columns: `routine_name`, `style`, `dancer_name`"
+        "- **Jackrabbit Recital Export** — columns: `Routine`, `Performer Name`\n"
+        "- **Grid-style CSV** — columns: `Class Name`, `Student Name`\n"
+        "- **App format** — columns: `routine_name`, `style`, `dancer_name`"
     )
     uploaded = st.file_uploader("Choose CSV", type="csv")
     if uploaded:
@@ -1098,7 +1123,7 @@ with tab1:
                     for i, r in enumerate(show['routines']):
                         r['order'] = i + 1
                     save_to_sheets(spreadsheet, st.session_state.shows, force=True)
-                    st.success(f"\u2705 Import Complete! {len(show['routines'])} routines imported successfully.")
+                    st.success(f"✅ Import Complete! {len(show['routines'])} routines imported successfully.")
                     st.balloons()
                     st.rerun()
             else:
@@ -1256,7 +1281,7 @@ with tab3:
         if conflicts.get('min_gap_violations'):
             st.error(f"MIN GAP VIOLATIONS: {len(conflicts['min_gap_violations'])} dancer(s) have gaps smaller than {show['min_gap']}")
             for v in conflicts['min_gap_violations']:
-                st.write(f"\u274c **{v['dancer']}**: only {v['gap']}-routine gap (need {v['required']}) between #{v['pos1']+1} {v['routine1']} and #{v['pos2']+1} {v['routine2']}")
+                st.write(f"❌ **{v['dancer']}**: only {v['gap']}-routine gap (need {v['required']}) between #{v['pos1']+1} {v['routine1']} and #{v['pos2']+1} {v['routine2']}")
             st.divider()
         else:
             st.success(f"All dancers have at least {show['min_gap']} routines between appearances!")
@@ -1264,12 +1289,12 @@ with tab3:
         if conflicts.get('team_backtoback'):
             st.markdown("**Team Back-to-Back:**")
             for tb in conflicts['team_backtoback']:
-                st.write(f"\u26a0\ufe0f #{tb['pos1']+1} {tb['name1']} and #{tb['pos2']+1} {tb['name2']} are back-to-back Team routines")
+                st.write(f"⚠️ #{tb['pos1']+1} {tb['name1']} and #{tb['pos2']+1} {tb['name2']} are back-to-back Team routines")
             st.divider()
         if conflicts.get('style_backtoback'):
             st.error(f"STYLE VIOLATIONS: {len(conflicts['style_backtoback'])} back-to-back same style pair(s)")
             for sb in conflicts['style_backtoback']:
-                st.write(f"\u274c #{sb['pos1']+1} {sb['name1']} and #{sb['pos2']+1} {sb['name2']} are both **{sb['style']}**")
+                st.write(f"❌ #{sb['pos1']+1} {sb['name1']} and #{sb['pos2']+1} {sb['name2']} are both **{sb['style']}**")
             st.divider()
         elif show.get('mix_styles', False):
             st.success("No back-to-back same style!")
@@ -1295,7 +1320,7 @@ with tab3:
             if name_violations:
                 st.error(f"SAME-NAME SPACING: {len(name_violations)} pair(s) too close (need {show['min_gap']} gap)")
                 for sv in name_violations:
-                    st.write(f"\u274c **{sv['base'].title()}**: #{sv['pos1']+1} {sv['name1']} and #{sv['pos2']+1} {sv['name2']} are only {sv['gap']} apart (need {show['min_gap']})")
+                    st.write(f"❌ **{sv['base'].title()}**: #{sv['pos1']+1} {sv['name1']} and #{sv['pos2']+1} {sv['name2']} are only {sv['gap']} apart (need {show['min_gap']})")
                 st.divider()
             else:
                 st.success("Same-name routines are well spread apart!")
@@ -1319,7 +1344,7 @@ with tab3:
         if age_warnings:
             st.markdown("**Age Group Proximity:**")
             for w in age_warnings:
-                st.write(f"\u26a0\ufe0f {w}")
+                st.write(f"⚠️ {w}")
             st.divider()
         if conflicts['dancer_conflicts']:
             st.markdown("**Other Dancer Conflicts:**")
@@ -1327,7 +1352,7 @@ with tab3:
                 already_in_min = any(v['dancer'] == dancer for v in conflicts.get('min_gap_violations', []))
                 if already_in_min:
                     continue
-                emoji = "\u26a0\ufe0f WARNING" if info['min_gap'] < show['warn_gap'] else "!"
+                emoji = "⚠️ WARNING" if info['min_gap'] < show['warn_gap'] else "!"
                 st.write(f"{emoji} **{dancer}**: {info['min_gap']}-routine gap {info['positions'][0]+1}. {info['routines'][0]} to {info['positions'][1]+1}. {info['routines'][1]}")
         if (not conflicts['dancer_conflicts'] and not age_warnings
             and not conflicts.get('team_backtoback')
@@ -1485,14 +1510,14 @@ with tab4:
         elif report_type == "Performer Schedules":
             st.markdown("### Performer Schedules")
             for dancer in sorted(all_dancers):
-                with st.expander(f"\U0001f464 {dancer}"):
+                with st.expander(f"👤 {dancer}"):
                     routines = dancer_routines.get(dancer, [])
                     if routines:
                         st.write("(Beginning of Show)")
                         for idx, (pos, routine_name) in enumerate(routines):
-                            st.markdown(f"\u2193")
+                            st.markdown(f"↓")
                             st.markdown(f"**{pos + 1}. {routine_name}**")
-                        st.markdown(f"\u2193")
+                        st.markdown(f"↓")
                         st.write("(End of Show)")
             performer_data = []
             for dancer in sorted(all_dancers):
