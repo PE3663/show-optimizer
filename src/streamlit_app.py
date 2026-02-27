@@ -1265,6 +1265,26 @@ with tab1:
         age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
         with st.expander(f"{r.get('order', '?')}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers"):
             st.write(", ".join(r['dancers']))
+            if st.button("\U0001f5d1\ufe0f Delete", key=f"upload_del_{r['id']}", type="secondary"):
+                st.session_state[f"confirm_upload_del_{r['id']}"] = True
+            if st.session_state.get(f"confirm_upload_del_{r['id']}", False):
+                st.warning(f"Are you sure you want to delete **{r['name']}**? This cannot be undone.")
+                udel1, udel2 = st.columns([1, 1])
+                with udel1:
+                    if st.button("Yes, delete it", key=f"yes_upload_del_{r['id']}", type="primary"):
+                        rid = r['id']
+                        show['routines'] = [x for x in show['routines'] if x.get('id') != rid]
+                        show['optimized'] = [x for x in show['optimized'] if x.get('id') != rid]
+                        for idx, rt in enumerate(show['routines']):
+                            rt['order'] = idx + 1
+                        for idx, rt in enumerate(show['optimized']):
+                            rt['order'] = idx + 1
+                        save_to_sheets(spreadsheet, st.session_state.shows, force=True)
+                        st.rerun()
+                with udel2:
+                    if st.button("Cancel", key=f"no_upload_del_{r['id']}"):
+                        st.session_state[f"confirm_upload_del_{r['id']}"] = False
+                        st.rerun()
 
 with tab2:
     st.subheader("Show Order")
@@ -1310,7 +1330,7 @@ with tab2:
                 age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
                 with st.expander(f"{chr(10060) if i in conflict_positions else chr(9989)} {i+1}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers"):
                     new_name = st.text_input("Routine Name", value=r['name'], key=f"rename_{r['id']}")
-                    rcol1, rcol2 = st.columns([1, 1])
+                    rcol1, rcol2, rcol3 = st.columns([1, 1, 1])
                     with rcol1:
                         if st.button("Rename", key=f"do_rename_{r['id']}"):
                             if new_name and new_name != r['name']:
@@ -1329,6 +1349,27 @@ with tab2:
                             r['locked'] = not r.get('locked', False)
                             save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                             st.rerun()
+                    with rcol3:
+                        if st.button("\U0001f5d1\ufe0f Delete", key=f"del_{r['id']}", type="secondary"):
+                            st.session_state[f"confirm_del_{r['id']}"] = True
+                    if st.session_state.get(f"confirm_del_{r['id']}", False):
+                        st.warning(f"Are you sure you want to delete **{r['name']}**? This cannot be undone.")
+                        cdel1, cdel2 = st.columns([1, 1])
+                        with cdel1:
+                            if st.button("Yes, delete it", key=f"yes_del_{r['id']}", type="primary"):
+                                rid = r['id']
+                                show['routines'] = [x for x in show['routines'] if x.get('id') != rid]
+                                show['optimized'] = [x for x in show['optimized'] if x.get('id') != rid]
+                                for idx, rt in enumerate(show['routines']):
+                                    rt['order'] = idx + 1
+                                for idx, rt in enumerate(show['optimized']):
+                                    rt['order'] = idx + 1
+                                save_to_sheets(spreadsheet, st.session_state.shows, force=True)
+                                st.rerun()
+                        with cdel2:
+                            if st.button("Cancel", key=f"no_del_{r['id']}"):
+                                st.session_state[f"confirm_del_{r['id']}"] = False
+                                st.rerun()
                     st.write(", ".join(r['dancers']))
         st.divider()
         st.markdown("**Add Intermission**")
