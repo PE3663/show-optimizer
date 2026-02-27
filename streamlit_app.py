@@ -181,21 +181,26 @@ def balance_halves(routines, min_gap_override=None):
     half_size = n // 2
     h2_size = n - half_size
 
+    # Determine capacity per half
+    # Use the show's min_gap from session_state if available
     show_gap = min_gap_override
     if show_gap is None:
-        show_gap = 4
+        show_gap = 4  # safe default
     max_per_h1 = (half_size - 1) // show_gap + 1
     max_per_h2 = (h2_size - 1) // show_gap + 1
 
     diag = [f"Balance: {n} routines, target {half_size}/{h2_size}, gap={show_gap}, capacity={max_per_h1}/{max_per_h2}"]
 
+    # Build helpers
     base_groups = {}
     for idx, r in enumerate(non_intermission):
         base = get_base_name(r['name'])
         base_groups.setdefault(base, []).append(idx)
 
+    # ── score function ──────────────────────────────────────────────
     def _score(asgn):
-        dancer_load = {}
+        """Score a half-assignment (list of 0/1). Lower = better."""
+        dancer_load = {}  # dancer -> [h1_count, h2_count]
         style_counts = [{}, {}]
         team_counts = [0, 0]
         for i, h in enumerate(asgn):
@@ -212,12 +217,14 @@ def balance_halves(routines, min_gap_override=None):
         sc = 0
         caps = [max_per_h1, max_per_h2]
 
+        # HARD – capacity violations
         for d, (c0, c1) in dancer_load.items():
             for h in (0, 1):
                 excess = [c0, c1][h] - caps[h]
                 if excess > 0:
                     sc += excess * 1000000
 
+        # Minimise peak dancer load per half
         for d, (c0, c1) in dancer_load.items():
             total = c0 + c1
             ideal = (total + 1) // 2
@@ -225,11 +232,12 @@ def balance_halves(routines, min_gap_override=None):
             deviation = peak - ideal
             if deviation > 0:
                 sc += deviation * 500
-            if peak >= caps[0]:
+            if peak >= caps[0]:   # at capacity
                 sc += 2000
-            elif peak >= caps[0] - 1:
+            elif peak >= caps[0] - 1:  # one below capacity
                 sc += 200
 
+        # Same-name groups should be split evenly
         for bn, idxs in base_groups.items():
             if len(idxs) < 2:
                 continue
@@ -239,10 +247,12 @@ def balance_halves(routines, min_gap_override=None):
             if imb > 1:
                 sc += imb * 100
 
+        # Team balance
         sc += abs(team_counts[0] - team_counts[1]) * 50
 
         return sc
 
+    # ── initial assignment: natural input order ─────────────────────
     asgn = [0 if i < half_size else 1 for i in range(n)]
     best_sc = _score(asgn)
     best_asgn = asgn[:]
@@ -251,8 +261,9 @@ def balance_halves(routines, min_gap_override=None):
 
     random.seed(int(time.time()) % 100000)
 
+    # ── SA on the split ────────────────────────────────────────────
     sa_start = time.time()
-    sa_time = 8.0
+    sa_time = 8.0  # seconds budget (fast enough for UI)
     sa_iters = 120000
     for step in range(sa_iters):
         if time.time() - sa_start > sa_time:
@@ -281,9 +292,11 @@ def balance_halves(routines, min_gap_override=None):
 
     diag.append(f"SA split optimiser: {step+1} iters in {time.time()-sa_start:.1f}s, score={best_sc}")
 
+    # ── build result ───────────────────────────────────────────────
     half1 = [non_intermission[i] for i in range(n) if best_asgn[i] == 0]
     half2 = [non_intermission[i] for i in range(n) if best_asgn[i] == 1]
 
+    # Dancer-load diagnostics
     dancer_load = {}
     for i, h in enumerate(best_asgn):
         for d in non_intermission[i].get('dancers', []):
@@ -492,7 +505,7 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     prev_is_team = False
     prev_age = None
     prev_idx = None
-    bn_last = {}
+    bn_last = {}  # base_name -> last non-intermission position index
     for i, r in enumerate(order):
         if r.get('is_intermission'):
             dancer_last = {}
@@ -500,19 +513,22 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
             prev_is_team = False
             prev_age = None
             prev_idx = None
-            bn_last = {}
+            bn_last = {}  # reset at intermission
             continue
         style = r.get('style', '')
         rt_is_team = is_team_routine(r)
         age = r.get('age_group', 'Unknown')
+        # Style back-to-back violation
         if mix_styles and prev_style and style and style == prev_style:
             bad.add(i)
             if prev_idx is not None:
                 bad.add(prev_idx)
+        # Team back-to-back violation
         if rt_is_team and prev_is_team:
             bad.add(i)
             if prev_idx is not None:
                 bad.add(prev_idx)
+        # Dancer gap violation
         for dn in r.get('dancers', []):
             if dn in dancer_last:
                 d = i - dancer_last[dn]
@@ -520,12 +536,14 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
                     bad.add(i)
                     bad.add(dancer_last[dn])
             dancer_last[dn] = i
+        # Age group proximity violation
         if separate_ages and age and age != 'Unknown':
             for j in range(max(0, i - age_gap + 1), i):
                 if j < len(order) and not order[j].get('is_intermission'):
                     if order[j].get('age_group') == age:
                         bad.add(i)
                         bad.add(j)
+        # Same-name spacing violation
         if spread_names:
             bn = get_base_name(r.get('name', ''))
             if bn in bn_last:
@@ -544,7 +562,11 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
 OPTIMIZER_VERSION = "v10-balanced-20260227"
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2, spread_names=True, _diag=None):
-    """Fast reliable optimizer: smart greedy init + simulated annealing."""
+    """Fast reliable optimizer: smart greedy init + simulated annealing.
+    
+    Uses backbone pre-placement for tight constraints, then SA for everything.
+    The key is getting a good initial solution so SA can finish quickly.
+    """
     def _log(msg):
         if _diag is not None:
             _diag.append(msg)
@@ -580,8 +602,9 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         for dn in routine_dancers[r['id']]:
             dancer_to_rids.setdefault(dn, []).append(r['id'])
 
+    # Pre-compute base names for same-name spacing
     routine_base_name = {}
-    base_name_rids = {}
+    base_name_rids = {}  # base_name -> list of routine ids
     if spread_names:
         for r in routines:
             if r.get('is_intermission'):
@@ -589,7 +612,9 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             bn = get_base_name(r.get('name', ''))
             routine_base_name[r['id']] = bn
             base_name_rids.setdefault(bn, []).append(r['id'])
+        # Only track groups with 2+ routines (singletons can't conflict)
         base_name_rids = {bn: rids for bn, rids in base_name_rids.items() if len(rids) >= 2}
+        # Build rid -> set of same-name sibling ids (for fast lookup)
         same_name_siblings = {}
         for bn, rids in base_name_rids.items():
             rid_set = set(rids)
@@ -603,6 +628,8 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     unlocked_positions = sorted(set(range(n)) - locked_positions)
     ul_set = set(unlocked_positions)
 
+    # Pre-compute: for each pair of routine ids, do they share dancers?
+    # (Only needed for routines in unlocked set)
     unlocked_ids = [r['id'] for r in unlocked]
     pair_shares = {}
     for i in range(len(unlocked_ids)):
@@ -612,33 +639,42 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 pair_shares[(r1, r2)] = True
                 pair_shares[(r2, r1)] = True
 
-    W_DANCER_GAP = 100
-    W_TEAM_B2B  = 500
-    W_STYLE_B2B = 10
-    W_NAME_GAP  = 10
-    W_AGE       = 1
+    # ── Weighted violation scorer ─────────────────────────────────────
+    # Weight hierarchy ensures SA NEVER trades a hard constraint for soft ones.
+    # HARD:   dancer_gap (100 per gap-unit short), team_b2b (500)
+    # MEDIUM: style_b2b (10), same_name_gap (10 per gap-unit short)
+    # SOFT:   age_group (1)
+    W_DANCER_GAP = 100   # per gap-unit shortfall
+    W_TEAM_B2B  = 500    # per occurrence
+    W_STYLE_B2B = 10     # per occurrence
+    W_NAME_GAP  = 10     # per gap-unit shortfall
+    W_AGE       = 1      # per occurrence
 
     def count_violations(order):
         v = 0
         dl = {}
-        bn_last = {}
+        bn_last = {}  # base_name -> last position
         for i in range(n):
             r = order[i]
             if r is None or r.get('is_intermission'):
                 continue
+            # Team back-to-back — HARD
             if is_team(r) and i > 0 and order[i-1] is not None and is_team(order[i-1]):
                 v += W_TEAM_B2B
+            # Dancer gap — HARD
             for dn in routine_dancers[r['id']]:
                 if dn in dl:
                     gap = i - dl[dn]
                     if gap < min_gap:
                         v += W_DANCER_GAP * (min_gap - gap)
                 dl[dn] = i
+            # Style back-to-back — MEDIUM
             if mix_styles:
                 s = r.get('style', '')
                 if s and i > 0 and order[i-1] is not None:
                     if not order[i-1].get('is_intermission') and order[i-1].get('style') == s:
                         v += W_STYLE_B2B
+            # Same-name spacing — MEDIUM
             if spread_names and r['id'] in same_name_siblings:
                 bn = routine_base_name[r['id']]
                 if bn in bn_last:
@@ -646,6 +682,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                     if gap < min_gap:
                         v += W_NAME_GAP * (min_gap - gap)
                 bn_last[bn] = i
+            # Age group proximity — SOFT
             if separate_ages:
                 age = r.get('age_group', 'Unknown')
                 if age and age != 'Unknown':
@@ -659,7 +696,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     def find_violating(order):
         bad = set()
         dl = {}
-        bn_last = {}
+        bn_last = {}  # base_name -> last position
         for i in range(n):
             r = order[i]
             if r is None or r.get('is_intermission'):
@@ -674,11 +711,13 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 if dn in dl and i - dl[dn] < min_gap:
                     bad.add(i); bad.add(dl[dn])
                 dl[dn] = i
+            # Same-name spacing violation
             if spread_names and r['id'] in same_name_siblings:
                 bn = routine_base_name[r['id']]
                 if bn in bn_last and i - bn_last[bn] < min_gap:
                     bad.add(i); bad.add(bn_last[bn])
                 bn_last[bn] = i
+            # Age group proximity violation
             if separate_ages:
                 age = r.get('age_group', 'Unknown')
                 if age and age != 'Unknown':
@@ -688,6 +727,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                                 bad.add(i); bad.add(j)
         return bad
 
+    # ── Enumerate valid position sequences ───────────────────────────
     def enum_sequences(k, n_slots, gap, avail_set):
         results = []
         avail = sorted(avail_set)
@@ -710,6 +750,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         bt(0, -1, [])
         return results
 
+    # ── Greedy fill with bidirectional gap awareness ─────────────────
     def greedy_fill(pinned, seed):
         random.seed(seed)
         order = [None] * n
@@ -718,8 +759,9 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         for rid, pos in pinned.items():
             order[pos] = rid_to_r[rid]
 
+        # Build dancer->positions map from all placed routines
         dancer_positions = {}
-        base_name_positions = {}
+        base_name_positions = {}  # base_name -> [positions]
         for i in range(n):
             if order[i] is not None:
                 for dn in routine_dancers.get(order[i]['id'], []):
@@ -755,32 +797,39 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                     continue
                 pen = 0
 
+                # --- HARD CONSTRAINTS (very high penalty) ---
+
+                # Dancer gap: check ALL existing positions for each dancer (bidirectional)
                 for dn in dancers:
                     positions = dancer_positions.get(dn, [])
                     for prev_pos in positions:
                         g = abs(slot - prev_pos)
                         if g < min_gap:
-                            pen += (min_gap - g) * 10000
+                            pen += (min_gap - g) * 10000  # HARD: dancer gap
                             break
 
                 if pen >= best_pen:
                     continue
 
+                # Team back-to-back — HARD constraint
                 if is_team(routine):
                     if slot > 0 and order[slot-1] is not None and is_team(order[slot-1]):
-                        pen += 50000
+                        pen += 50000  # HARD: team back-to-back
                     if slot < n-1 and order[slot+1] is not None and is_team(order[slot+1]):
                         pen += 50000
 
                 if pen >= best_pen:
                     continue
 
+                # --- MEDIUM CONSTRAINTS ---
+
+                # Style back-to-back
                 if mix_styles:
                     style = routine.get('style', '')
                     if style:
                         if slot > 0 and order[slot-1] is not None:
                             if not order[slot-1].get('is_intermission') and order[slot-1].get('style') == style:
-                                pen += 5000
+                                pen += 5000  # MEDIUM: style back-to-back
                         if slot < n-1 and order[slot+1] is not None:
                             if not order[slot+1].get('is_intermission') and order[slot+1].get('style') == style:
                                 pen += 5000
@@ -788,24 +837,26 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 if pen >= best_pen:
                     continue
 
+                # Same-name spacing
                 if spread_names and rid in same_name_siblings:
                     bn = routine_base_name[rid]
                     for prev_pos in base_name_positions.get(bn, []):
                         g = abs(slot - prev_pos)
                         if g < min_gap:
-                            pen += (min_gap - g) * 5000
+                            pen += (min_gap - g) * 5000  # MEDIUM: same-name spacing
                             break
 
                 if pen >= best_pen:
                     continue
 
+                # Age group separation
                 if separate_ages:
                     age = routine.get('age_group', 'Unknown')
                     if age and age != 'Unknown':
                         for check_pos in range(max(0, slot - age_gap + 1), slot):
                             if order[check_pos] is not None and not order[check_pos].get('is_intermission'):
                                 if order[check_pos].get('age_group') == age:
-                                    pen += 1000
+                                    pen += 1000  # SOFT: age group proximity
                         for check_pos in range(slot + 1, min(n, slot + age_gap)):
                             if order[check_pos] is not None and not order[check_pos].get('is_intermission'):
                                 if order[check_pos].get('age_group') == age:
@@ -814,6 +865,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 if pen >= best_pen:
                     continue
 
+                # Tiebreak: maximize minimum gap to any dancer's other placement
                 if pen == 0:
                     min_g = 9999
                     for dn in dancers:
@@ -840,6 +892,8 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
 
         return order
 
+    # ── Simulated annealing (iteration-count based for stability) ────
+    # Performance-optimized: caches violating positions, recomputes periodically.
     def anneal(order, max_iters):
         cur_v = count_violations(order)
         best_v = cur_v
@@ -848,12 +902,14 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             return best_order, 0
         ul = unlocked_positions[:]
         n_ul = len(ul)
+        # Cache bad positions, refresh every 50 steps
         cached_bad_ul = None
         cache_age = 999
         for step in range(max_iters):
             progress = step / max_iters
             temp = max(0.1, 20.0 * (1.0 - progress))
             if random.random() < 0.8:
+                # Refresh cache periodically or when stale
                 if cache_age >= 50:
                     bad = find_violating(order)
                     cached_bad_ul = [p for p in ul if p in bad]
@@ -871,11 +927,11 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             delta = new_v - cur_v
             if delta <= 0 or (temp > 0.5 and random.random() < math.exp(-delta / temp)):
                 cur_v = new_v
-                cache_age += 1
+                cache_age += 1  # Mark cache as potentially stale
                 if cur_v < best_v:
                     best_v = cur_v
                     best_order = order[:]
-                    cache_age = 999
+                    cache_age = 999  # Force refresh on improvement
                     if best_v == 0:
                         return best_order, 0
             else:
@@ -883,18 +939,24 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 cache_age += 1
         return best_order, best_v
 
+    # ── Backbone disabled — greedy builder handles all constraints ──
     backbone_rids = []
     backbone_seqs = []
 
+    # ── MAIN LOOP: two-phase search ──────────────────────────────────
+    # Phase 1: Many fast greedy builds to find best starting point
+    # Phase 2: Intensive SA on the best starting point
     best_order = None
     best_v = float('inf')
     start = time.time()
-    max_time = 40.0
+    max_time = 40.0       # Total time budget per segment
     iteration = 0
 
     _log(f"Backbone: {len(backbone_rids)} rids, {len(backbone_seqs)} sequences")
     _log(f"Phase 1: greedy search, Phase 2: intensive SA")
 
+    # Phase 1: Fast greedy search (use most of the time budget)
+    # Greedy alone can find perfect solutions for this constraint type
     phase1_end = start + min(32.0, max_time * 0.8)
     while (time.time() < phase1_end) and best_v > 0:
         iteration += 1
@@ -923,6 +985,8 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
 
     _log(f"Phase 1 done: {iteration} greedy builds, best_v={best_v}, elapsed={time.time()-start:.1f}s")
 
+    # Phase 2: Intensive SA on the best starting point + new greedy starts
+    # Use remaining time budget for deep SA repair
     sa_round = 0
     while best_v > 0 and (time.time() - start) < max_time:
         sa_round += 1
@@ -930,9 +994,12 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         if remaining_time < 1.0:
             break
 
+        # Alternate between SA on best order and SA on fresh greedy
         if sa_round % 2 == 1:
+            # SA on best known order
             work_order = best_order[:]
         else:
+            # SA on fresh greedy build
             pinned = {}
             if backbone_rids and backbone_seqs:
                 seq = random.choice(backbone_seqs)
@@ -942,6 +1009,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             seed = int(time.time() * 1000000) + random.randint(0, 999999)
             work_order = greedy_fill(pinned, seed)
 
+        # Scale SA iterations to remaining time
         sa_iters = 40000
 
         result, rv = anneal(work_order, sa_iters)
@@ -1394,12 +1462,13 @@ with tab3:
         elif show.get('mix_styles', False):
             st.success("No back-to-back same style!")
             st.divider()
+        # Same-name group spacing violations
         if show.get('spread_names', True):
             name_violations = []
-            bn_last_pos = {}
+            bn_last_pos = {}  # base_name -> (last_position, last_routine_name)
             for i, r in enumerate(r_list):
                 if r.get('is_intermission'):
-                    bn_last_pos = {}
+                    bn_last_pos = {}  # reset at intermission
                     continue
                 bn = get_base_name(r.get('name', ''))
                 if bn in bn_last_pos:
@@ -1608,6 +1677,7 @@ with tab4:
                             f"<tr><td>{cd['Performer']}</td><td>{cd['Coming From']}</td><td>{cd['This Routine']}</td><td>{cd['Going To']}</td></tr>"
                             for cd in change_data
                         )
+                        safe_name = r['name'].replace(' ', '_').replace('/', '-')
                         print_html = (
                             f"<html><head><title>Quick Change - {r['name']}</title>"
                             f"<style>"
@@ -1616,22 +1686,22 @@ with tab4:
                             f"table{{border-collapse:collapse;width:100%;margin-top:12px;}}"
                             f"th,td{{border:1px solid #ccc;padding:8px 12px;text-align:left;}}"
                             f"th{{background:#f0f0f0;font-weight:bold;}}"
-                            f"@media print{{body{{margin:0;}} button{{display:none;}}}}"
+                            f"@media print{{.no-print{{display:none;}}}}"
                             f"</style></head><body>"
                             f"<h2>{show['name']}</h2>"
                             f"<h3>Quick Change: {routine_title}</h3>"
                             f"<table><tr><th>Performer</th><th>Coming From</th><th>This Routine</th><th>Going To</th></tr>"
                             f"{rows_html}</table>"
-                            f"<br><button onclick=\"window.print()\">Print</button>"
+                            f"<br><p class='no-print' style='color:#888;font-size:13px;'>Use Ctrl+P (or Cmd+P on Mac) to print this page.</p>"
+                            f"<script>window.onload=function(){{window.print();}}</script>"
                             f"</body></html>"
                         )
-                        import base64 as _b64
-                        encoded = _b64.b64encode(print_html.encode()).decode()
-                        st.markdown(
-                            f'<a href="data:text/html;base64,{encoded}" target="_blank" '
-                            f'style="display:inline-block;padding:4px 12px;background:#ff4b4b;color:white;'
-                            f'border-radius:4px;text-decoration:none;font-size:14px;">\U0001f5a8\ufe0f Print</a>',
-                            unsafe_allow_html=True
+                        st.download_button(
+                            "\U0001f5a8\ufe0f Print",
+                            print_html,
+                            file_name=f"QuickChange_{safe_name}.html",
+                            mime="text/html",
+                            key=f"qc_print_{r['id']}"
                         )
                 st.write("")
         elif report_type == "Performer Schedules":
