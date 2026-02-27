@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 
 st.set_page_config(
     page_title="Pure Energy Show Sort",
-    page_icon="💃",
+    page_icon="\U0001F483",
     layout="wide"
 )
 
@@ -109,7 +109,7 @@ def extract_discipline(class_name):
 
 def extract_age_group(routine_name):
     name = str(routine_name).strip()
-    m = re.search(r'(\d+\s*[-–]\s*\d+)\s*[Yy]', name)
+    m = re.search(r'(\d+\s*[-\u2013]\s*\d+)\s*[Yy]', name)
     if m:
         return m.group(1).replace(' ', '') + 'Yrs'
     m = re.search(r'(\d+\+)\s*[Yy]', name)
@@ -144,6 +144,99 @@ def has_intermission_between(order, pos1, pos2):
         if k < len(order) and order[k] is not None and order[k].get('is_intermission'):
             return True
     return False
+
+def get_base_name(routine_name):
+    """Extract base name by stripping age groups, years, and numbering."""
+    name = routine_name.strip()
+    name = re.sub(r'\([^)]*\)', '', name)
+    name = re.sub(r'\[[^\]]*\]', '', name)
+    name = re.sub(r'\d+\s*[-\u2013]\s*\d+\s*[Yy][Rr][Ss]?\.?', '', name)
+    name = re.sub(r'\d+\+\s*[Yy][Rr][Ss]?\.?', '', name)
+    name = re.sub(r'\b\d{1,2}\b', '', name)
+    name = re.sub(r'\b20\d{2}\b', '', name)
+    name = re.sub(r'[\s.]+', ' ', name.strip()).strip()
+    return name.lower()
+
+def balance_halves(routines):
+    """Redistribute routines across halves so that groups of similar routines
+    (same base name or same style) are spread evenly."""
+    intermission = None
+    non_intermission = []
+    for r in routines:
+        if r.get('is_intermission'):
+            intermission = r
+        else:
+            non_intermission.append(r)
+    if not intermission:
+        return routines, ["No intermission found \u2014 add one first"]
+    n = len(non_intermission)
+    half_size = n // 2
+    base_groups = {}
+    for r in non_intermission:
+        base = get_base_name(r['name'])
+        base_groups.setdefault(base, []).append(r)
+    style_counts = {}
+    for r in non_intermission:
+        s = r.get('style', 'General')
+        style_counts[s] = style_counts.get(s, 0) + 1
+    split_groups = {base: rs for base, rs in base_groups.items() if len(rs) >= 2}
+    diag = [f"Routines: {n}, target: {half_size}/{n - half_size}"]
+    for base, rs in sorted(split_groups.items()):
+        diag.append(f"  Split '{base}': {len(rs)} routines")
+    half1, half2, assigned = [], [], set()
+    for base, rs in sorted(split_groups.items(), key=lambda x: -len(x[1])):
+        n_group = len(rs)
+        n_h1 = n_group // 2
+        n_h2 = n_group - n_h1
+        remaining_h1 = half_size - len(half1)
+        remaining_h2 = (n - half_size) - len(half2)
+        if n_h1 > remaining_h1:
+            n_h1 = max(0, remaining_h1)
+            n_h2 = n_group - n_h1
+        if n_h2 > remaining_h2:
+            n_h2 = max(0, remaining_h2)
+            n_h1 = n_group - n_h2
+        for i, r in enumerate(rs):
+            if i < n_h1:
+                half1.append(r)
+            else:
+                half2.append(r)
+            assigned.add(r.get('id'))
+    remaining = [r for r in non_intermission if r.get('id') not in assigned]
+    h1_styles, h2_styles = {}, {}
+    for r in half1:
+        s = r.get('style', 'General')
+        h1_styles[s] = h1_styles.get(s, 0) + 1
+    for r in half2:
+        s = r.get('style', 'General')
+        h2_styles[s] = h2_styles.get(s, 0) + 1
+    remaining.sort(key=lambda r: (-style_counts.get(r.get('style', 'General'), 0), r.get('style', '')))
+    for r in remaining:
+        s = r.get('style', 'General')
+        h1c = h1_styles.get(s, 0)
+        h2c = h2_styles.get(s, 0)
+        h1_full = len(half1) >= half_size
+        h2_full = len(half2) >= (n - half_size)
+        if h1_full:
+            half2.append(r); h2_styles[s] = h2c + 1
+        elif h2_full:
+            half1.append(r); h1_styles[s] = h1c + 1
+        elif h1c < h2c:
+            half1.append(r); h1_styles[s] = h1c + 1
+        elif h2c < h1c:
+            half2.append(r); h2_styles[s] = h2c + 1
+        elif len(half1) <= len(half2):
+            half1.append(r); h1_styles[s] = h1c + 1
+        else:
+            half2.append(r); h2_styles[s] = h2c + 1
+    diag.append(f"Result: H1={len(half1)}, H2={len(half2)}")
+    all_styles = sorted(set(list(h1_styles.keys()) + list(h2_styles.keys())))
+    for s in all_styles:
+        diag.append(f"  {s}: H1={h1_styles.get(s,0)}, H2={h2_styles.get(s,0)}")
+    result = half1 + [intermission] + half2
+    for i, r in enumerate(result):
+        r['order'] = i + 1
+    return result, diag
 
 def detect_and_map_csv(df):
     col_map = {}
@@ -435,7 +528,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 pair_shares[(r1, r2)] = True
                 pair_shares[(r2, r1)] = True
 
-    # ── Violation counter ────────────────────────────────────
+    # ── Violation counter ────────────────────────────────────────────
     def count_violations(order):
         v = 0
         dl = {}
@@ -476,7 +569,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 dl[dn] = i
         return bad
 
-    # ── Enumerate valid position sequences ─────────────────────
+    # ── Enumerate valid position sequences ───────────────────────────
     def enum_sequences(k, n_slots, gap, avail_set):
         results = []
         avail = sorted(avail_set)
@@ -600,7 +693,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
 
         return order
 
-    # ── Simulated annealing ────────────────────────────────────
+    # ── Simulated annealing ──────────────────────────────────────────
     def anneal(order, time_budget):
         cur_v = count_violations(order)
         best_v = cur_v
@@ -638,7 +731,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 order[p1], order[p2] = order[p2], order[p1]
         return best_order, best_v
 
-    # ── Find backbone ────────────────────────────────────────────
+    # ── Find backbone ────────────────────────────────────────────────
     rid_tuple_to_dancers = {}
     for dn, rids in dancer_to_rids.items():
         unlocked_rids = tuple(sorted([rid for rid in rids if rid not in locked_ids]))
@@ -661,7 +754,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         backbone_rids = rids
         backbone_seqs = enum_sequences(k, n, min_gap, set(unlocked_positions))
 
-    # ── MAIN LOOP: greedy restart + SA ─────────────────────────────────
+    # ── MAIN LOOP: greedy restart + SA ───────────────────────────────
     best_order = None
     best_v = float('inf')
     start = time.time()
@@ -780,33 +873,55 @@ with st.sidebar:
             st.info("Same dance style never placed back-to-back")
         st.info("Intermissions reset gap counting between halves")
         st.divider()
-        if st.button("OPTIMIZE", type="primary", use_container_width=True):
-            if not show['routines']:
-                st.warning("No routines to optimize. Upload and import a CSV first.")
-            else:
-                input_order = show['optimized'] if show['optimized'] else show['routines']
-                st.session_state['_opt_input_hash'] = hash(tuple(r.get('id','') for r in input_order if not r.get('is_intermission')))
-                result, diag = optimize_show(
-                                    input_order,
-                    show['min_gap'],
-                    show['mix_styles'],
-                    show.get('separate_ages', True),
-                    show.get('age_gap', 2),
-                    show.get('spread_teams', False)
-                )
-                st.session_state['_opt_output_hash'] = hash(tuple(r.get('id','') for r in result if not r.get('is_intermission')))
-                show['optimized'] = result
-                st.session_state['_last_diag'] = diag
-                # Verify the result is different from input
-                inp_ids = [r.get('id','') for r in input_order if not r.get('is_intermission')]
-                out_ids = [r.get('id','') for r in result if not r.get('is_intermission')]
-                if inp_ids == out_ids:
-                    diag.append("WARNING: Output order is IDENTICAL to input!")
+        bcol_bal, bcol_opt = st.columns(2)
+        with bcol_bal:
+            if st.button("Balance Halves", use_container_width=True, help="Distribute similar routines and styles evenly across both halves"):
+                target = show['optimized'] if show['optimized'] else show['routines']
+                has_int = any(r.get('is_intermission') for r in target)
+                if not has_int:
+                    st.warning("Add an intermission first so halves can be balanced.")
+                elif not target:
+                    st.warning("No routines to balance.")
                 else:
-                    diag.append(f"Order changed: {sum(1 for a,b in zip(inp_ids, out_ids) if a!=b)}/{len(inp_ids)} positions differ")
-                save_to_sheets(spreadsheet, st.session_state.shows, force=True)
-                st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
-                st.rerun()
+                    balanced, bal_diag = balance_halves(target)
+                    if show['optimized']:
+                        show['optimized'] = balanced
+                    else:
+                        show['routines'] = balanced
+                    st.session_state['_last_bal_diag'] = bal_diag
+                    save_to_sheets(spreadsheet, st.session_state.shows, force=True)
+                    st.rerun()
+        with bcol_opt:
+            if st.button("OPTIMIZE", type="primary", use_container_width=True):
+                if not show['routines']:
+                    st.warning("No routines to optimize. Upload and import a CSV first.")
+                else:
+                    input_order = show['optimized'] if show['optimized'] else show['routines']
+                    st.session_state['_opt_input_hash'] = hash(tuple(r.get('id','') for r in input_order if not r.get('is_intermission')))
+                    result, diag = optimize_show(
+                        input_order,
+                        show['min_gap'],
+                        show['mix_styles'],
+                        show.get('separate_ages', True),
+                        show.get('age_gap', 2),
+                        show.get('spread_teams', False)
+                    )
+                    st.session_state['_opt_output_hash'] = hash(tuple(r.get('id','') for r in result if not r.get('is_intermission')))
+                    show['optimized'] = result
+                    st.session_state['_last_diag'] = diag
+                    inp_ids = [r.get('id','') for r in input_order if not r.get('is_intermission')]
+                    out_ids = [r.get('id','') for r in result if not r.get('is_intermission')]
+                    if inp_ids == out_ids:
+                        diag.append("WARNING: Output order is IDENTICAL to input!")
+                    else:
+                        diag.append(f"Order changed: {sum(1 for a,b in zip(inp_ids, out_ids) if a!=b)}/{len(inp_ids)} positions differ")
+                    save_to_sheets(spreadsheet, st.session_state.shows, force=True)
+                    st.session_state['_sv'] = st.session_state.get('_sv', 0) + 1
+                    st.rerun()
+        if st.session_state.get('_last_bal_diag'):
+            with st.expander("Last balance run", expanded=False):
+                for d in st.session_state['_last_bal_diag']:
+                    st.text(d)
         if st.session_state.get('_last_diag'):
             with st.expander("Last optimizer run", expanded=True):
                 for d in st.session_state['_last_diag']:
@@ -830,12 +945,12 @@ with tab1:
     st.subheader("Upload Class Roster (CSV)")
     st.markdown(
         "**Supported formats:**\n"
-        "- **Jackrabbit Enrollment CSV** — columns: "
+        "- **Jackrabbit Enrollment CSV** \u2014 columns: "
         "`Class Name`, `Student First Name`, `Student Last Name`\n"
         "  - *Discipline is auto-detected from the Class Name*\n"
-        "- **Jackrabbit Recital Export** — columns: `Routine`, `Performer Name`\n"
-        "- **Grid-style CSV** — columns: `Class Name`, `Student Name`\n"
-        "- **App format** — columns: `routine_name`, `style`, `dancer_name`"
+        "- **Jackrabbit Recital Export** \u2014 columns: `Routine`, `Performer Name`\n"
+        "- **Grid-style CSV** \u2014 columns: `Class Name`, `Student Name`\n"
+        "- **App format** \u2014 columns: `routine_name`, `style`, `dancer_name`"
     )
     uploaded = st.file_uploader("Choose CSV", type="csv")
     if uploaded:
@@ -1014,9 +1129,9 @@ with tab2:
                 save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                 st.rerun()
         st.divider()
-        bcol1, bcol2 = st.columns(2)
+        bcol1, bcol2, bcol3 = st.columns(3)
         with bcol1:
-            if st.button("Save Optimized as Current Order", type="primary"):
+            if st.button("Save as Current", type="primary"):
                 show['routines'] = show['optimized'].copy()
                 for i, r in enumerate(show['routines']):
                     r['order'] = i + 1
@@ -1024,6 +1139,21 @@ with tab2:
                 st.success("Saved!")
                 st.rerun()
         with bcol2:
+            if st.button("Balance Halves", key="balance_show_order", help="Distribute similar routines evenly across halves"):
+                target = show['optimized'] if show['optimized'] else show['routines']
+                has_int = any(r.get('is_intermission') for r in target)
+                if not has_int:
+                    st.warning("Add an intermission first.")
+                else:
+                    balanced, bal_diag = balance_halves(target)
+                    if show['optimized']:
+                        show['optimized'] = balanced
+                    else:
+                        show['routines'] = balanced
+                    st.session_state['_last_bal_diag'] = bal_diag
+                    save_to_sheets(spreadsheet, st.session_state.shows, force=True)
+                    st.rerun()
+        with bcol3:
             if st.button("Optimize", type="primary", key="optimize_show_order"):
                 if not show['routines']:
                     st.warning("No routines to optimize.")
