@@ -1265,7 +1265,7 @@ with tab1:
         age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
         with st.expander(f"{r.get('order', '?')}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers"):
             st.write(", ".join(r['dancers']))
-            if st.button("\U0001f5d1\ufe0f Delete", key=f"upload_del_{r['id']}", type="secondary"):
+            if st.button("🗑️ Delete", key=f"upload_del_{r['id']}", type="secondary"):
                 st.session_state[f"confirm_upload_del_{r['id']}"] = True
             if st.session_state.get(f"confirm_upload_del_{r['id']}", False):
                 st.warning(f"Are you sure you want to delete **{r['name']}**? This cannot be undone.")
@@ -1350,7 +1350,7 @@ with tab2:
                             save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                             st.rerun()
                     with rcol3:
-                        if st.button("\U0001f5d1\ufe0f Delete", key=f"del_{r['id']}", type="secondary"):
+                        if st.button("🗑️ Delete", key=f"del_{r['id']}", type="secondary"):
                             st.session_state[f"confirm_del_{r['id']}"] = True
                     if st.session_state.get(f"confirm_del_{r['id']}", False):
                         st.warning(f"Are you sure you want to delete **{r['name']}**? This cannot be undone.")
@@ -1565,7 +1565,8 @@ with tab4:
                 dancer_routines[dancer].append((i, r['name']))
         report_type = st.selectbox("Select Report Type", [
             "Program Order", "Roster", "Check-In", "Check-Out",
-            "Program Schedule", "Quick Change Schedule", "Performer Schedules"
+            "Program Schedule", "Quick Change Schedule", "Performer Schedules",
+            "Cross-Intermission Performers"
         ])
         st.divider()
         if report_type == "Program Order":
@@ -1697,7 +1698,7 @@ with tab4:
                             f"</body></html>"
                         )
                         st.download_button(
-                            "\U0001f5a8\ufe0f Print",
+                            "🖨️ Print",
                             print_html,
                             file_name=f"QuickChange_{safe_name}.html",
                             mime="text/html",
@@ -1730,3 +1731,51 @@ with tab4:
             df_performer = pd.DataFrame(performer_data)
             csv = df_performer.to_csv(index=False)
             st.download_button("Download CSV", csv, f"{show['name']}_performer_schedules.csv", "text/csv")
+        elif report_type == "Cross-Intermission Performers":
+            st.markdown("### Cross-Intermission Performers")
+            st.caption("Dancers who appear in both halves of the show.")
+            intermission_idx = None
+            for idx_r, rr in enumerate(r_list):
+                if rr.get('is_intermission'):
+                    intermission_idx = idx_r
+                    break
+            if intermission_idx is None:
+                st.warning("No intermission found in the show order. Add an intermission first to use this report.")
+            else:
+                half1_dancers = {}
+                half2_dancers = {}
+                for idx_r, rr in enumerate(r_list):
+                    if rr.get('is_intermission'):
+                        continue
+                    for dancer in rr.get('dancers', []):
+                        if idx_r < intermission_idx:
+                            if dancer not in half1_dancers:
+                                half1_dancers[dancer] = []
+                            half1_dancers[dancer].append((idx_r, rr['name']))
+                        else:
+                            if dancer not in half2_dancers:
+                                half2_dancers[dancer] = []
+                            half2_dancers[dancer].append((idx_r, rr['name']))
+                cross_dancers = sorted(set(half1_dancers.keys()) & set(half2_dancers.keys()))
+                if not cross_dancers:
+                    st.info("No dancers appear in both halves.")
+                else:
+                    st.success(f"**{len(cross_dancers)}** performer(s) appear in both halves of the show.")
+                    cross_data = []
+                    for dancer in cross_dancers:
+                        h1 = half1_dancers[dancer]
+                        h2 = half2_dancers[dancer]
+                        last_h1_pos, last_h1_name = h1[-1]
+                        first_h2_pos, first_h2_name = h2[0]
+                        cross_data.append({
+                            'Performer': dancer,
+                            'Half 1 Routines': len(h1),
+                            'Last Before Intermission': f"#{last_h1_pos + 1} {last_h1_name}",
+                            'First After Intermission': f"#{first_h2_pos + 1} {first_h2_name}",
+                            'Half 2 Routines': len(h2),
+                            'Total Routines': len(h1) + len(h2)
+                        })
+                    df_cross = pd.DataFrame(cross_data)
+                    st.dataframe(df_cross, use_container_width=True, hide_index=True)
+                    csv = df_cross.to_csv(index=False)
+                    st.download_button("Download CSV", csv, f"{show['name']}_cross_intermission.csv", "text/csv")
