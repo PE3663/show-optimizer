@@ -211,15 +211,12 @@ def balance_halves(routines):
     for r in half2:
         s = r.get('style', 'General')
         h2_styles[s] = h2_styles.get(s, 0) + 1
-    # Build dancer sets per half for overlap-aware distribution
     h1_dancers = set()
     h2_dancers = set()
     for r in half1:
         h1_dancers.update(r.get('dancers', []))
     for r in half2:
         h2_dancers.update(r.get('dancers', []))
-    # Sort remaining: team routines first (they have most dancer overlap impact),
-    # then by style frequency
     remaining.sort(key=lambda r: (
         0 if is_team_routine(r) else 1,
         -len(r.get('dancers', [])),
@@ -233,7 +230,6 @@ def balance_halves(routines):
         h1_full = len(half1) >= half_size
         h2_full = len(half2) >= (n - half_size)
         dancers = set(r.get('dancers', []))
-        # Count how many of this routine's dancers already appear in each half
         h1_overlap = len(dancers & h1_dancers)
         h2_overlap = len(dancers & h2_dancers)
         if h1_full:
@@ -241,8 +237,6 @@ def balance_halves(routines):
         elif h2_full:
             half1.append(r); h1_styles[s] = h1c + 1; h1_dancers.update(dancers)
         else:
-            # Prefer the half with less dancer overlap (reduces constraint density)
-            # Use style balance as tiebreaker
             h1_score = h1_overlap * 3 + h1c
             h2_score = h2_overlap * 3 + h2c
             if h1_score < h2_score:
@@ -451,7 +445,7 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     prev_is_team = False
     prev_age = None
     prev_idx = None
-    bn_last = {}  # base_name -> last non-intermission position index
+    bn_last = {}
     for i, r in enumerate(order):
         if r.get('is_intermission'):
             dancer_last = {}
@@ -459,22 +453,19 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
             prev_is_team = False
             prev_age = None
             prev_idx = None
-            bn_last = {}  # reset at intermission
+            bn_last = {}
             continue
         style = r.get('style', '')
         rt_is_team = is_team_routine(r)
         age = r.get('age_group', 'Unknown')
-        # Style back-to-back violation
         if mix_styles and prev_style and style and style == prev_style:
             bad.add(i)
             if prev_idx is not None:
                 bad.add(prev_idx)
-        # Team back-to-back violation
         if rt_is_team and prev_is_team:
             bad.add(i)
             if prev_idx is not None:
                 bad.add(prev_idx)
-        # Dancer gap violation
         for dn in r.get('dancers', []):
             if dn in dancer_last:
                 d = i - dancer_last[dn]
@@ -482,14 +473,12 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
                     bad.add(i)
                     bad.add(dancer_last[dn])
             dancer_last[dn] = i
-        # Age group proximity violation
         if separate_ages and age and age != 'Unknown':
             for j in range(max(0, i - age_gap + 1), i):
                 if j < len(order) and not order[j].get('is_intermission'):
                     if order[j].get('age_group') == age:
                         bad.add(i)
                         bad.add(j)
-        # Same-name spacing violation
         if spread_names:
             bn = get_base_name(r.get('name', ''))
             if bn in bn_last:
@@ -505,14 +494,10 @@ def _find_violating_positions(order, min_gap, mix_styles, separate_ages=False, a
     return bad
 
 
-OPTIMIZER_VERSION = "v7-stable-20260227"
+OPTIMIZER_VERSION = "v8-stable-20260227"
 
 def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_gap=2, spread_names=True, _diag=None):
-    """Fast reliable optimizer: smart greedy init + simulated annealing.
-    
-    Uses backbone pre-placement for tight constraints, then SA for everything.
-    The key is getting a good initial solution so SA can finish quickly.
-    """
+    """Fast reliable optimizer: smart greedy init + simulated annealing."""
     def _log(msg):
         if _diag is not None:
             _diag.append(msg)
@@ -548,9 +533,8 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         for dn in routine_dancers[r['id']]:
             dancer_to_rids.setdefault(dn, []).append(r['id'])
 
-    # Pre-compute base names for same-name spacing
     routine_base_name = {}
-    base_name_rids = {}  # base_name -> list of routine ids
+    base_name_rids = {}
     if spread_names:
         for r in routines:
             if r.get('is_intermission'):
@@ -558,9 +542,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             bn = get_base_name(r.get('name', ''))
             routine_base_name[r['id']] = bn
             base_name_rids.setdefault(bn, []).append(r['id'])
-        # Only track groups with 2+ routines (singletons can't conflict)
         base_name_rids = {bn: rids for bn, rids in base_name_rids.items() if len(rids) >= 2}
-        # Build rid -> set of same-name sibling ids (for fast lookup)
         same_name_siblings = {}
         for bn, rids in base_name_rids.items():
             rid_set = set(rids)
@@ -574,8 +556,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     unlocked_positions = sorted(set(range(n)) - locked_positions)
     ul_set = set(unlocked_positions)
 
-    # Pre-compute: for each pair of routine ids, do they share dancers?
-    # (Only needed for routines in unlocked set)
     unlocked_ids = [r['id'] for r in unlocked]
     pair_shares = {}
     for i in range(len(unlocked_ids)):
@@ -585,11 +565,10 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 pair_shares[(r1, r2)] = True
                 pair_shares[(r2, r1)] = True
 
-    # ── Violation counter ────────────────────────────────────
     def count_violations(order):
         v = 0
         dl = {}
-        bn_last = {}  # base_name -> last position
+        bn_last = {}
         for i in range(n):
             r = order[i]
             if r is None or r.get('is_intermission'):
@@ -606,7 +585,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                     if i - dl[dn] < min_gap:
                         v += 1
                 dl[dn] = i
-            # Same-name spacing violation
             if spread_names and r['id'] in same_name_siblings:
                 bn = routine_base_name[r['id']]
                 if bn in bn_last:
@@ -618,7 +596,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     def find_violating(order):
         bad = set()
         dl = {}
-        bn_last = {}  # base_name -> last position
+        bn_last = {}
         for i in range(n):
             r = order[i]
             if r is None or r.get('is_intermission'):
@@ -633,7 +611,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 if dn in dl and i - dl[dn] < min_gap:
                     bad.add(i); bad.add(dl[dn])
                 dl[dn] = i
-            # Same-name spacing violation
             if spread_names and r['id'] in same_name_siblings:
                 bn = routine_base_name[r['id']]
                 if bn in bn_last and i - bn_last[bn] < min_gap:
@@ -641,7 +618,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 bn_last[bn] = i
         return bad
 
-    # ── Enumerate valid position sequences ─────────────────────
     def enum_sequences(k, n_slots, gap, avail_set):
         results = []
         avail = sorted(avail_set)
@@ -664,7 +640,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         bt(0, -1, [])
         return results
 
-    # ── Greedy fill with bidirectional gap awareness ─────────────────
     def greedy_fill(pinned, seed):
         random.seed(seed)
         order = [None] * n
@@ -673,9 +648,8 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         for rid, pos in pinned.items():
             order[pos] = rid_to_r[rid]
 
-        # Build dancer->positions map from all placed routines
         dancer_positions = {}
-        base_name_positions = {}  # base_name -> [positions]
+        base_name_positions = {}
         for i in range(n):
             if order[i] is not None:
                 for dn in routine_dancers.get(order[i]['id'], []):
@@ -711,19 +685,17 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                     continue
                 pen = 0
 
-                # Dancer gap: check ALL existing positions for each dancer (bidirectional)
                 for dn in dancers:
                     positions = dancer_positions.get(dn, [])
                     for prev_pos in positions:
                         g = abs(slot - prev_pos)
                         if g < min_gap:
                             pen += (min_gap - g) * 100
-                            break  # One violation per dancer is enough to penalize
+                            break
 
                 if pen >= best_pen:
                     continue
 
-                # Style back-to-back
                 if mix_styles:
                     style = routine.get('style', '')
                     if style:
@@ -737,7 +709,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 if pen >= best_pen:
                     continue
 
-                # Team back-to-back
                 if is_team(routine):
                     if slot > 0 and order[slot-1] is not None and is_team(order[slot-1]):
                         pen += 500
@@ -747,7 +718,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 if pen >= best_pen:
                     continue
 
-                # Same-name spacing: check distance to any same-name sibling
                 if spread_names and rid in same_name_siblings:
                     bn = routine_base_name[rid]
                     for prev_pos in base_name_positions.get(bn, []):
@@ -759,7 +729,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 if pen >= best_pen:
                     continue
 
-                # Tiebreak: maximize minimum gap to any dancer's other placement
                 if pen == 0:
                     min_g = 9999
                     for dn in dancers:
@@ -786,8 +755,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
 
         return order
 
-    # ── Simulated annealing ────────────────────────────────────
-    def anneal(order, time_budget):
+    def anneal(order, max_iters):
         cur_v = count_violations(order)
         best_v = cur_v
         best_order = order[:]
@@ -795,10 +763,9 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             return best_order, 0
         ul = unlocked_positions[:]
         n_ul = len(ul)
-        start_t = time.time()
-        while time.time() - start_t < time_budget:
-            elapsed = time.time() - start_t
-            temp = max(0.01, 2.0 * (1.0 - elapsed / time_budget))
+        for step in range(max_iters):
+            progress = step / max_iters
+            temp = max(0.01, 2.0 * (1.0 - progress))
             if random.random() < 0.7:
                 bad = find_violating(order)
                 bad_ul = [p for p in ul if p in bad]
@@ -824,7 +791,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 order[p1], order[p2] = order[p2], order[p1]
         return best_order, best_v
 
-    # ── Find backbone ─────────────────────────────────────────
     rid_tuple_to_dancers = {}
     for dn, rids in dancer_to_rids.items():
         unlocked_rids = tuple(sorted([rid for rid in rids if rid not in locked_ids]))
@@ -847,23 +813,18 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         backbone_rids = rids
         backbone_seqs = enum_sequences(k, n, min_gap, set(unlocked_positions))
 
-    # ── MAIN LOOP: greedy restart + SA ───────────────────────────
     best_order = None
     best_v = float('inf')
     start = time.time()
-    total_time = 15
+    max_iterations = 40
     iteration = 0
 
     _log(f"Backbone: {len(backbone_rids)} rids, {len(backbone_seqs)} sequences")
-    _log(f"Starting main loop with {total_time}s budget")
+    _log(f"Starting main loop with {max_iterations} iteration cap")
 
-    while time.time() - start < total_time and best_v > 0:
-        remaining_time = total_time - (time.time() - start)
-        if remaining_time < 0.3:
-            break
+    while iteration < max_iterations and best_v > 0:
         iteration += 1
 
-        # Build pinned backbone
         pinned = {}
         if backbone_rids and backbone_seqs:
             seq = random.choice(backbone_seqs)
@@ -871,7 +832,6 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             random.shuffle(perm)
             pinned = {backbone_rids[perm[i]]: seq[i] for i in range(len(backbone_rids))}
 
-        # Greedy fill
         seed = int(time.time() * 1000000) + random.randint(0, 999999)
         order = greedy_fill(pinned, seed)
         v = count_violations(order)
@@ -887,23 +847,20 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
             best_v = v
             best_order = order[:]
 
-        # SA repair — adaptive time budget
-        remaining_time = total_time - (time.time() - start)
         if v <= 2:
-            sa_time = min(remaining_time * 0.7, 5.0)
+            sa_iters = 5000
         elif v <= 5:
-            sa_time = min(remaining_time * 0.5, 4.0)
+            sa_iters = 3000
         else:
-            sa_time = min(remaining_time * 0.4, 3.0)
+            sa_iters = 2000
 
-        if sa_time > 0.3:
-            result, rv = anneal(order[:], sa_time)
-            if rv == 0:
-                _log(f"PERFECT at iter {iteration} after {time.time()-start:.1f}s (SA repair)")
-                return result
-            if rv < best_v:
-                best_v = rv
-                best_order = result
+        result, rv = anneal(order[:], sa_iters)
+        if rv == 0:
+            _log(f"PERFECT at iter {iteration} after {time.time()-start:.1f}s (SA repair)")
+            return result
+        if rv < best_v:
+            best_v = rv
+            best_order = result
 
     elapsed = time.time() - start
     _log(f"Time expired: {iteration} iters in {elapsed:.1f}s, best_v={best_v}")
@@ -1305,13 +1262,12 @@ with tab3:
         elif show.get('mix_styles', False):
             st.success("No back-to-back same style!")
             st.divider()
-        # Same-name group spacing violations
         if show.get('spread_names', True):
             name_violations = []
-            bn_last_pos = {}  # base_name -> (last_position, last_routine_name)
+            bn_last_pos = {}
             for i, r in enumerate(r_list):
                 if r.get('is_intermission'):
-                    bn_last_pos = {}  # reset at intermission
+                    bn_last_pos = {}
                     continue
                 bn = get_base_name(r.get('name', ''))
                 if bn in bn_last_pos:
