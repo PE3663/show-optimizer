@@ -247,6 +247,41 @@ def balance_halves(routines, min_gap_override=None):
             if imb > 1:
                 sc += imb * 100
 
+        # NON-TEAM dancers in 2+ routines: prefer same half
+        for d, (c0, c1) in dancer_load.items():
+            total = c0 + c1
+            if total < 2:
+                continue
+            # Check if ALL of this dancer's routines are non-Team
+            d_all_non_team = True
+            for i, r in enumerate(non_intermission):
+                if d in r.get('dancers', []) and is_team_routine(r):
+                    d_all_non_team = False
+                    break
+            if d_all_non_team and c0 > 0 and c1 > 0:
+                # Dancer is split across halves — penalise
+                sc += min(c0, c1) * 800
+
+        # SIBLINGS (same last name, 2+ distinct people in non-Team routines): prefer same half
+        surname_dancers_per_half = {}  # surname -> {0: set(dancers), 1: set(dancers)}
+        for i, r in enumerate(non_intermission):
+            if is_team_routine(r):
+                continue
+            for d in r.get('dancers', []):
+                parts = d.strip().split()
+                if len(parts) >= 2:
+                    surname = parts[-1].lower()
+                    if surname not in surname_dancers_per_half:
+                        surname_dancers_per_half[surname] = {0: set(), 1: set()}
+                    surname_dancers_per_half[surname][asgn[i]].add(d)
+        for surname, half_sets in surname_dancers_per_half.items():
+            all_people = half_sets[0] | half_sets[1]
+            if len(all_people) < 2:
+                continue  # not a sibling group
+            if half_sets[0] and half_sets[1]:
+                # Siblings split across halves
+                sc += 600
+
         # Team balance
         sc += abs(team_counts[0] - team_counts[1]) * 50
 
