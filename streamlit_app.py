@@ -296,7 +296,7 @@ def balance_halves(routines, min_gap_override=None):
 
     random.seed(int(time.time()) % 100000)
 
-    # ── SA on the split ────────────────────────────────────────────
+    # ── SA on the split ──────────────────────────────────────────
     sa_start = time.time()
     sa_time = 8.0  # seconds budget (fast enough for UI)
     sa_iters = 120000
@@ -674,7 +674,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                 pair_shares[(r1, r2)] = True
                 pair_shares[(r2, r1)] = True
 
-    # ── Weighted violation scorer ─────────────────────────────────────
+    # ── Weighted violation scorer ──────────────────────────────────────────────────
     # Weight hierarchy ensures SA NEVER trades a hard constraint for soft ones.
     # HARD:   dancer_gap (100 per gap-unit short), team_b2b (500)
     # MEDIUM: style_b2b (10), same_name_gap (10 per gap-unit short)
@@ -762,7 +762,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
                                 bad.add(i); bad.add(j)
         return bad
 
-    # ── Enumerate valid position sequences ───────────────────────────
+    # ── Enumerate valid position sequences ────────────────────────────────────
     def enum_sequences(k, n_slots, gap, avail_set):
         results = []
         avail = sorted(avail_set)
@@ -785,7 +785,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
         bt(0, -1, [])
         return results
 
-    # ── Greedy fill with bidirectional gap awareness ─────────────────
+    # ── Greedy fill with bidirectional gap awareness ───────────────────────
     def greedy_fill(pinned, seed):
         random.seed(seed)
         order = [None] * n
@@ -978,7 +978,7 @@ def _optimize_segment(routines, min_gap, mix_styles, separate_ages=False, age_ga
     backbone_rids = []
     backbone_seqs = []
 
-    # ── MAIN LOOP: two-phase search ──────────────────────────────────
+    # ── MAIN LOOP: two-phase search ──────────────────────────────────────────
     # Phase 1: Many fast greedy builds to find best starting point
     # Phase 2: Intensive SA on the best starting point
     best_order = None
@@ -1300,7 +1300,7 @@ with tab1:
         age_str = f" [{age_label}]" if age_label and age_label != 'Unknown' else ""
         with st.expander(f"{r.get('order', '?')}. {r['name']} ({r['style']}){age_str} - {len(r['dancers'])} dancers"):
             st.write(", ".join(r['dancers']))
-            if st.button("🗑️ Delete", key=f"upload_del_{r['id']}", type="secondary"):
+            if st.button("\U0001f5d1\ufe0f Delete", key=f"upload_del_{r['id']}", type="secondary"):
                 st.session_state[f"confirm_upload_del_{r['id']}"] = True
             if st.session_state.get(f"confirm_upload_del_{r['id']}", False):
                 st.warning(f"Are you sure you want to delete **{r['name']}**? This cannot be undone.")
@@ -1385,7 +1385,7 @@ with tab2:
                             save_to_sheets(spreadsheet, st.session_state.shows, force=True)
                             st.rerun()
                     with rcol3:
-                        if st.button("🗑️ Delete", key=f"del_{r['id']}", type="secondary"):
+                        if st.button("\U0001f5d1\ufe0f Delete", key=f"del_{r['id']}", type="secondary"):
                             st.session_state[f"confirm_del_{r['id']}"] = True
                     if st.session_state.get(f"confirm_del_{r['id']}", False):
                         st.warning(f"Are you sure you want to delete **{r['name']}**? This cannot be undone.")
@@ -1733,7 +1733,7 @@ with tab4:
                             f"</body></html>"
                         )
                         st.download_button(
-                            "🖨️ Print",
+                            "\U0001f5a8\ufe0f Print",
                             print_html,
                             file_name=f"QuickChange_{safe_name}.html",
                             mime="text/html",
